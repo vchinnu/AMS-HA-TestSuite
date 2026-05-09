@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HA Cluster E2E Test Dashboard - AMS</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #eaeaea; min-height: 100vh; }
+        
+        .header { background: linear-gradient(135deg, #16213e, #0f3460); padding: 25px 40px; border-bottom: 3px solid #0ea5e9; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 22px; color: #fff; }
+        .header .subtitle { color: #94a3b8; font-size: 13px; margin-top: 3px; }
+        .header .nav-tabs { display: flex; gap: 5px; }
+        .header .nav-tabs button { padding: 8px 18px; border: 1px solid #334155; background: transparent; color: #94a3b8; border-radius: 6px; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+        .header .nav-tabs button.active { background: #0ea5e9; color: #fff; border-color: #0ea5e9; }
+        .header .nav-tabs button:hover { border-color: #0ea5e9; color: #fff; }
+        
+        .container { max-width: 1200px; margin: 0 auto; padding: 30px 40px; }
+        
+        /* Tab content */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        /* Form styles */
+        .form-section { background: #16213e; border-radius: 10px; padding: 25px; border: 1px solid #1e3a5f; margin-bottom: 20px; }
+        .form-section h3 { color: #0ea5e9; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 1px solid #1e3a5f; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .form-group { display: flex; flex-direction: column; }
+        .form-group label { font-size: 12px; color: #64748b; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .form-group input, .form-group select { padding: 10px 14px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 14px; outline: none; transition: border-color 0.2s; }
+        .form-group input:focus, .form-group select:focus { border-color: #0ea5e9; }
+        .form-group input::placeholder { color: #475569; }
+        .form-group.full-width { grid-column: 1 / -1; }
+        
+        /* Node editor */
+        .node-editor { background: #0f172a; border-radius: 8px; padding: 15px; border: 1px solid #334155; }
+        .node-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr auto; gap: 10px; margin-bottom: 8px; align-items: center; }
+        .node-row input { padding: 8px 10px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #fff; font-size: 13px; }
+        .node-row input:focus { border-color: #0ea5e9; outline: none; }
+        .btn-remove { background: #ef444433; color: #f87171; border: none; border-radius: 4px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+        .btn-add-node { background: #16213e; color: #0ea5e9; border: 1px dashed #334155; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 12px; margin-top: 8px; width: 100%; }
+        .btn-add-node:hover { border-color: #0ea5e9; }
+        
+        /* Buttons */
+        .btn-primary { background: linear-gradient(135deg, #0ea5e9, #0284c7); color: #fff; border: none; border-radius: 8px; padding: 14px 32px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(14,165,233,0.3); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; border: none; border-radius: 6px; padding: 10px 20px; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .btn-secondary { background: #334155; color: #94a3b8; border: none; border-radius: 6px; padding: 10px 20px; font-size: 13px; cursor: pointer; }
+        
+        .form-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+        
+        /* Progress section */
+        .progress-panel { background: #16213e; border-radius: 10px; padding: 25px; border: 1px solid #1e3a5f; margin-bottom: 20px; }
+        .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .progress-header h3 { color: #fff; font-size: 16px; }
+        .progress-bar-container { background: #0f172a; border-radius: 20px; height: 8px; margin-bottom: 20px; overflow: hidden; }
+        .progress-bar { height: 100%; background: linear-gradient(90deg, #0ea5e9, #22c55e); border-radius: 20px; transition: width 0.5s ease; }
+        .progress-phases { display: flex; gap: 10px; flex-wrap: wrap; }
+        .progress-phase { background: #0f172a; border-radius: 6px; padding: 10px 14px; border: 1px solid #334155; flex: 1; min-width: 150px; }
+        .progress-phase.running { border-color: #f59e0b; animation: pulse 1.5s infinite; }
+        .progress-phase.passed { border-color: #22c55e; }
+        .progress-phase.failed { border-color: #ef4444; }
+        .progress-phase .phase-num { font-size: 11px; color: #64748b; }
+        .progress-phase .phase-name { font-size: 13px; color: #fff; margin-top: 2px; }
+        .progress-phase .phase-status { font-size: 11px; margin-top: 4px; }
+        .progress-phase.passed .phase-status { color: #22c55e; }
+        .progress-phase.running .phase-status { color: #f59e0b; }
+        .progress-phase.failed .phase-status { color: #ef4444; }
+        .log-panel { margin-top: 16px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
+        .log-toggle { padding: 10px 14px; cursor: pointer; font-size: 12px; color: #94a3b8; font-weight: 600; user-select: none; }
+        .log-toggle:hover { color: #e2e8f0; background: #1e293b; }
+        .log-panel .log-content { display: none; max-height: 400px; overflow-y: auto; padding: 0 14px 12px; }
+        .log-panel.expanded .log-toggle::before { content: ''; }
+        .log-panel.expanded .log-content { display: block; }
+        .log-line { font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 11px; padding: 2px 0; color: #cbd5e1; display: flex; gap: 8px; }
+        .log-time { color: #64748b; min-width: 60px; }
+        .log-phase { color: #0ea5e9; min-width: 24px; }
+        .log-msg { color: #e2e8f0; }
+        .live-dot { display: inline-block; width: 8px; height: 8px; background: #22c55e; border-radius: 50%; margin-right: 6px; animation: pulse 1.5s ease-in-out infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+        
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+        
+        /* Runs History */
+        .runs-table { width: 100%; border-collapse: collapse; }
+        .runs-table th { background: #0f172a; padding: 12px; text-align: left; font-size: 11px; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; }
+        .runs-table td { padding: 12px; border-bottom: 1px solid #1e293b; font-size: 13px; }
+        .runs-table tr:hover { background: #1e293b; }
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+        .status-badge.passed { background: #22c55e22; color: #4ade80; }
+        .status-badge.failed { background: #ef444422; color: #f87171; }
+        .status-badge.running { background: #f59e0b22; color: #fbbf24; }
+        .report-link { color: #0ea5e9; text-decoration: none; font-size: 12px; }
+        .report-link:hover { text-decoration: underline; }
+        
+        /* Empty state */
+        .empty-state { text-align: center; padding: 60px 20px; color: #64748b; }
+        .empty-state h3 { color: #94a3b8; margin-bottom: 10px; }
+        
+        /* Toast */
+        .toast { position: fixed; top: 20px; right: 20px; padding: 14px 20px; border-radius: 8px; font-size: 13px; z-index: 1000; display: none; animation: slideIn 0.3s; }
+        .toast.success { background: #065f46; color: #6ee7b7; border: 1px solid #22c55e; }
+        .toast.error { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+        @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>AMS HA Provider — OS Compatibility Test Suite</h1>
+            <div class="subtitle">Validate new OS versions for HA Cluster provider support in Azure Monitor for SAP</div>
+        </div>
+        <div class="nav-tabs">
+            <button class="active" onclick="switchTab('new-test')">New Test</button>
+            <button onclick="switchTab('progress')">Progress</button>
+            <button onclick="switchTab('history')">Run History</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- TAB: New Test -->
+        <div id="tab-new-test" class="tab-content active">
+            <form id="testForm" onsubmit="startTest(event)">
+                <div class="form-actions" style="margin-bottom:20px;justify-content:flex-start;">
+                    <button type="button" class="btn-secondary" onclick="loadSampleConfig()">Load Sample</button>
+                    <button type="button" class="btn-secondary" onclick="clearForm()" style="background:#1e293b;border:1px solid #475569;">Clear Form</button>
+                    <div style="flex:1;"></div>
+                    <button type="submit" class="btn-primary" id="btnStart">Start Test (Phase 1→6)</button>
+                </div>
+
+                <div class="form-section">
+                    <h3>Cluster Details</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>SAP SID *</label>
+                            <input type="text" id="sap_sid" placeholder="CHA" required maxlength="3">
+                        </div>
+                        <div class="form-group">
+                            <label>Cluster Name *</label>
+                            <input type="text" id="cluster_name" placeholder="ha_ascs_cluster" required>
+                        </div>
+                        <div class="form-group">
+                            <label>OS Type *</label>
+                            <select id="os_type" required>
+                                <option value="SUSE">SUSE</option>
+                                <option value="RHEL">RHEL</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>OS Version</label>
+                            <input type="text" id="os_version" placeholder="SLES 15 SP5">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h3>Azure Subscription & Resources</h3>
+                    <div class="form-grid">
+                        <div class="form-group full-width">
+                            <label>Resource Group Resource ID <span style="color:#64748b;text-transform:none;letter-spacing:0;">(paste to auto-fill Subscription, RG & Location)</span></label>
+                            <input type="text" id="rg_resource_id" placeholder="/subscriptions/.../resourceGroups/..." oninput="parseRgResourceId(this.value)">
+                        </div>
+                        <div class="form-group">
+                            <label>Subscription ID *</label>
+                            <input type="text" id="subscription_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Resource Group *</label>
+                            <input type="text" id="resource_group" placeholder="AMS-HACluster-Test-RG" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Location *</label>
+                            <input type="text" id="location" list="locationList" placeholder="e.g. northeurope, eastus2, westus2" required>
+                            <datalist id="locationList">
+                                <option value="northeurope">
+                                <option value="westeurope">
+                                <option value="eastus">
+                                <option value="eastus2">
+                                <option value="westus2">
+                                <option value="centralus">
+                                <option value="southeastasia">
+                                <option value="australiaeast">
+                                <option value="uksouth">
+                                <option value="japaneast">
+                                <option value="southcentralus">
+                                <option value="canadacentral">
+                                <option value="brazilsouth">
+                                <option value="koreacentral">
+                                <option value="francecentral">
+                                <option value="germanywestcentral">
+                                <option value="norwayeast">
+                                <option value="switzerlandnorth">
+                                <option value="uaenorth">
+                                <option value="southafricanorth">
+                                <option value="centralindia">
+                            </datalist>
+                        </div>
+                        <div class="form-group">
+                            <label>AMS Monitor Name</label>
+                            <input type="text" id="ams_monitor_name" placeholder="Auto-generated if empty">
+                        </div>
+                        <div class="form-group">
+                            <label>LA Workspace ID</label>
+                            <input type="text" id="log_analytics_workspace_id" placeholder="Auto-created by AMS" disabled style="opacity:0.6;">
+                        </div>
+                        <div class="form-group">
+                            <label>LA Workspace Name</label>
+                            <input type="text" id="log_analytics_workspace_name" placeholder="Auto-created by AMS" disabled style="opacity:0.6;">
+                        </div>
+                    </div>
+                    <p style="margin-top:12px;font-size:11px;color:#64748b;">LA Workspace is auto-created and managed by AMS. It will be auto-resolved during data validation steps. No manual input needed.</p>
+                </div>
+
+                <div class="form-section">
+                    <h3>Report Storage <span style="font-size:10px;color:#64748b;text-transform:none;letter-spacing:0;">(persists even after cleanup)</span></h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Storage Account Name</label>
+                            <input type="text" id="report_storage_account" placeholder="Auto-created: hatest<sid><random>">
+                        </div>
+                        <div class="form-group">
+                            <label>Storage Resource Group</label>
+                            <input type="text" id="report_storage_rg" placeholder="Same as above RG if empty">
+                        </div>
+                    </div>
+                    <p style="margin-top:12px;font-size:11px;color:#64748b;">A storage account (blob + table) is auto-created in the given Resource Group to persist HTML reports and execution history. This is NOT deleted when you run cleanup.</p>
+                </div>
+
+                <div class="form-section">
+                    <h3>Network — Cluster VM VNet</h3>
+                    <div class="form-grid">
+                        <div class="form-group full-width">
+                            <label>Cluster VNet Resource ID <span style="color:#64748b;text-transform:none;letter-spacing:0;">(paste to auto-fill VNet Name & RG)</span></label>
+                            <input type="text" id="cluster_vnet_resource_id" placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/..." oninput="parseClusterVnetResourceId(this.value)">
+                        </div>
+                        <div class="form-group">
+                            <label>Cluster VNet Name *</label>
+                            <input type="text" id="cluster_vnet_name" placeholder="VNet where cluster VMs reside">
+                        </div>
+                        <div class="form-group">
+                            <label>Cluster VNet Resource Group *</label>
+                            <input type="text" id="cluster_vnet_rg" placeholder="VNet's resource group">
+                        </div>
+                    </div>
+                    <p style="margin-top:12px;font-size:11px;color:#64748b;">The VNet where your HA cluster VMs are running.</p>
+                </div>
+
+                <div class="form-section">
+                    <h3>Network — AMS Managed Subnet</h3>
+                    <div class="form-grid">
+                        <div class="form-group full-width">
+                            <label style="display:flex;align-items:center;gap:10px;">
+                                <span>Use same VNet as cluster VMs?</span>
+                                <input type="checkbox" id="ams_same_vnet" checked onchange="toggleAmsVnet(this.checked)" style="width:18px;height:18px;accent-color:#0ea5e9;">
+                                <span style="color:#64748b;text-transform:none;letter-spacing:0;">If unchecked, specify a different VNet for AMS (peering will be auto-created)</span>
+                            </label>
+                        </div>
+                        <div id="ams_vnet_section" style="display:none;grid-column:1/-1;">
+                            <div class="form-grid">
+                                <div class="form-group full-width">
+                                    <label>AMS VNet Resource ID <span style="color:#64748b;text-transform:none;letter-spacing:0;">(paste to auto-fill)</span></label>
+                                    <input type="text" id="ams_vnet_resource_id" placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/..." oninput="parseAmsVnetResourceId(this.value)">
+                                </div>
+                                <div class="form-group">
+                                    <label>AMS VNet Name</label>
+                                    <input type="text" id="ams_vnet_name" placeholder="VNet for AMS subnet">
+                                </div>
+                                <div class="form-group">
+                                    <label>AMS VNet Resource Group</label>
+                                    <input type="text" id="ams_vnet_rg" placeholder="AMS VNet resource group">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>AMS Subnet Name</label>
+                            <input type="text" id="subnet_name" placeholder="ams-ha-test-subnet">
+                        </div>
+                        <div class="form-group">
+                            <label>AMS Subnet CIDR</label>
+                            <input type="text" id="subnet_cidr" value="/28" placeholder="/28">
+                        </div>
+                    </div>
+                    <div id="peering_notice" style="margin-top:12px;padding:10px 14px;background:#1e3a5f;border-left:3px solid #f59e0b;border-radius:4px;font-size:11px;color:#fbbf24;display:none;">
+                        ⚠️ Different VNets detected. Bidirectional VNet peering (with AllowForwardedTraffic) will be auto-created during AMS setup and removed during cleanup.
+                    </div>
+                    <p style="margin-top:12px;font-size:11px;color:#64748b;">AMS requires a dedicated /28 subnet. If using the same VNet as cluster VMs, the subnet is created directly. If using a different VNet, bidirectional VNet peering is auto-configured to ensure connectivity.</p>
+                </div>
+
+                <div class="form-section">
+                    <h3>Cluster Nodes (min 2) *</h3>
+                    <div class="node-editor" id="nodeEditor">
+                        <div class="node-row" style="margin-bottom:4px;">
+                            <span style="font-size:11px;color:#64748b;">Hostname</span>
+                            <span style="font-size:11px;color:#64748b;">IP Address</span>
+                            <span style="font-size:11px;color:#64748b;">VM Name</span>
+                            <span style="font-size:11px;color:#64748b;">VM Resource Group</span>
+                            <span></span>
+                        </div>
+                        <div class="node-row">
+                            <input type="text" placeholder="node1" class="node-hostname" required>
+                            <input type="text" placeholder="10.0.1.5" class="node-ip" required>
+                            <input type="text" placeholder="sap-node1-vm" class="node-vm" required>
+                            <input type="text" placeholder="vm-resource-group" class="node-vmrg">
+                            <button type="button" class="btn-remove" onclick="removeNode(this)">✕</button>
+                        </div>
+                        <div class="node-row">
+                            <input type="text" placeholder="node2" class="node-hostname" required>
+                            <input type="text" placeholder="10.0.1.6" class="node-ip" required>
+                            <input type="text" placeholder="sap-node2-vm" class="node-vm" required>
+                            <input type="text" placeholder="vm-resource-group" class="node-vmrg">
+                            <button type="button" class="btn-remove" onclick="removeNode(this)">✕</button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-add-node" onclick="addNode()">+ Add Node</button>
+                </div>
+
+                <div class="form-section">
+                    <h3>Execution Options <span style="font-size:10px;color:#64748b;text-transform:none;letter-spacing:0;">(how the tool connects to your cluster VMs)</span></h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Execution Method</label>
+                            <select id="execution_method">
+                                <option value="vm_run_command">VM Run Command (recommended)</option>
+                                <option value="bastion">Azure Bastion SSH</option>
+                                <option value="both">Both (fallback)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Poll Interval (seconds)</label>
+                            <input type="number" id="poll_interval" value="120" min="30" max="600">
+                        </div>
+                    </div>
+                    <div style="margin-top:12px;font-size:11px;color:#64748b;line-height:1.6;">
+                        <div style="margin-bottom:6px;"><strong style="color:#94a3b8;">VM Run Command</strong> — Executes commands on cluster VMs via Azure API (no direct SSH needed). Requires the VMs to have the Azure VM Agent running. Best for most scenarios.</div>
+                        <div style="margin-bottom:6px;"><strong style="color:#94a3b8;">Azure Bastion SSH</strong> — Connects to VMs via an existing Azure Bastion host using SSH tunneling. Use this if VM Run Command is blocked by policy or the VM agent is unavailable.</div>
+                        <div><strong style="color:#94a3b8;">Both (fallback)</strong> — Tries VM Run Command first; if it fails, automatically falls back to Bastion SSH. Recommended if you're unsure which method works in your environment.</div>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" onclick="loadSampleConfig()">Load Sample</button>
+                    <button type="button" class="btn-secondary" onclick="clearForm()" style="background:#1e293b;border:1px solid #475569;">Clear Form</button>
+                    <div style="flex:1;"></div>
+                    <button type="submit" class="btn-primary" id="btnStartBottom">Start Test (Phase 1→6)</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- TAB: Progress -->
+        <div id="tab-progress" class="tab-content">
+            <div id="progressContent">
+                <div class="empty-state">
+                    <h3>No Active Test Run</h3>
+                    <p>Start a new test from the "New Test" tab to see live progress here.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: History -->
+        <div id="tab-history" class="tab-content">
+            <div class="form-section">
+                <h3>Test Run History</h3>
+                <table class="runs-table">
+                    <thead>
+                        <tr><th>Run ID</th><th>SID</th><th>Cluster</th><th>OS</th><th>Status</th><th>Duration</th><th>Date & Time</th><th>Report</th></tr>
+                    </thead>
+                    <tbody id="runsBody">
+                        <tr><td colspan="8" style="text-align:center;color:#64748b;padding:40px;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // Configuration
+        const API_BASE = window.location.hostname === 'localhost' 
+            ? 'http://localhost:7071/api' 
+            : 'https://haclustertest-func-hjwf23.azurewebsites.net/api';
+        
+        let currentRunId = sessionStorage.getItem('currentRunId') || null;
+        let pollInterval = null;
+
+        // Tab switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.nav-tabs button').forEach(b => b.classList.remove('active'));
+            document.getElementById(`tab-${tab}`).classList.add('active');
+            event.target.classList.add('active');
+            sessionStorage.setItem('activeTab', tab);
+            
+            if (tab === 'history') loadRunHistory();
+            if (tab === 'progress') {
+                const runId = currentRunId || sessionStorage.getItem('currentRunId');
+                if (runId) {
+                    currentRunId = runId;
+                    viewRunProgress(runId);
+                } else {
+                    autoDetectRunningTest();
+                }
+            }
+        }
+
+        // Node management
+        function addNode() {
+            const editor = document.getElementById('nodeEditor');
+            const row = document.createElement('div');
+            row.className = 'node-row';
+            row.innerHTML = `
+                <input type="text" placeholder="nodeN" class="node-hostname" required>
+                <input type="text" placeholder="10.0.1.x" class="node-ip" required>
+                <input type="text" placeholder="sap-nodeN-vm" class="node-vm" required>
+                <input type="text" placeholder="vm-resource-group" class="node-vmrg">
+                <button type="button" class="btn-remove" onclick="removeNode(this)">✕</button>
+            `;
+            editor.appendChild(row);
+        }
+
+        function removeNode(btn) {
+            const rows = document.querySelectorAll('.node-row:not(:first-child)');
+            if (rows.length > 2) btn.closest('.node-row').remove();
+            else showToast('Minimum 2 nodes required', 'error');
+        }
+
+        // Collect form data
+        function getFormData() {
+            const nodes = [];
+            document.querySelectorAll('.node-row:not(:first-child)').forEach(row => {
+                const hostname = row.querySelector('.node-hostname').value.trim();
+                if (hostname) {
+                    nodes.push({
+                        hostname: hostname,
+                        ip_address: row.querySelector('.node-ip').value.trim(),
+                        fqdn: hostname,
+                        vm_name: row.querySelector('.node-vm').value.trim(),
+                        vm_resource_group: row.querySelector('.node-vmrg').value.trim()
+                    });
+                }
+            });
+
+            return {
+                subscription_id: document.getElementById('subscription_id').value.trim(),
+                resource_group: document.getElementById('resource_group').value.trim(),
+                location: document.getElementById('location').value,
+                sap_sid: document.getElementById('sap_sid').value.trim().toUpperCase(),
+                cluster_name: document.getElementById('cluster_name').value.trim(),
+                os_type: document.getElementById('os_type').value,
+                os_version: document.getElementById('os_version').value.trim(),
+                ams_monitor_name: document.getElementById('ams_monitor_name').value.trim(),
+                rg_resource_id: document.getElementById('rg_resource_id').value.trim(),
+                vnet_resource_id: document.getElementById('cluster_vnet_resource_id').value.trim(),
+                cluster_vnet: {
+                    name: document.getElementById('cluster_vnet_name').value.trim(),
+                    resource_group: document.getElementById('cluster_vnet_rg').value.trim()
+                },
+                ams_same_vnet: document.getElementById('ams_same_vnet').checked,
+                vnet: {
+                    name: document.getElementById('ams_same_vnet').checked
+                        ? document.getElementById('cluster_vnet_name').value.trim()
+                        : document.getElementById('ams_vnet_name').value.trim(),
+                    resource_group: document.getElementById('ams_same_vnet').checked
+                        ? document.getElementById('cluster_vnet_rg').value.trim()
+                        : document.getElementById('ams_vnet_rg').value.trim()
+                },
+                subnet: { name: document.getElementById('subnet_name').value.trim(), cidr: document.getElementById('subnet_cidr').value.trim() },
+                log_analytics_workspace_id: document.getElementById('log_analytics_workspace_id').value.trim(),
+                log_analytics_workspace_name: document.getElementById('log_analytics_workspace_name').value.trim(),
+                report_storage: {
+                    storage_account: document.getElementById('report_storage_account').value.trim(),
+                    resource_group: document.getElementById('report_storage_rg').value.trim()
+                },
+                nodes: nodes,
+                execution_method: document.getElementById('execution_method').value,
+                poll_interval_seconds: parseInt(document.getElementById('poll_interval').value)
+            };
+        }
+
+        // Start test
+        async function startTest(e) {
+            e.preventDefault();
+            const data = getFormData();
+            if (data.nodes.length < 2) { showToast('Add at least 2 cluster nodes', 'error'); return; }
+
+            document.getElementById('btnStart').disabled = true;
+            document.getElementById('btnStart').textContent = 'Starting...';
+            if (document.getElementById('btnStartBottom')) {
+                document.getElementById('btnStartBottom').disabled = true;
+                document.getElementById('btnStartBottom').textContent = 'Starting...';
+            }
+
+            try {
+                const resp = await fetch(`${API_BASE}/start-test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await resp.json();
+                
+                if (resp.ok) {
+                    currentRunId = result.runId;
+                    sessionStorage.setItem('currentRunId', result.runId);
+                    showToast(`Test started: ${result.runId}`, 'success');
+                    switchTabDirect('progress');
+                    startPolling(result.runId);
+                } else {
+                    // Server returned error but may include runId
+                    if (result.runId) {
+                        currentRunId = result.runId;
+                        sessionStorage.setItem('currentRunId', result.runId);
+                        switchTabDirect('progress');
+                        startPolling(result.runId);
+                    }
+                    showToast(result.error || 'Failed to start test', 'error');
+                }
+            } catch (err) {
+                showToast(`Network error: ${err.message}`, 'error');
+            }
+
+            document.getElementById('btnStart').disabled = false;
+            document.getElementById('btnStart').textContent = 'Start Test (Phase 1→6)';
+            if (document.getElementById('btnStartBottom')) {
+                document.getElementById('btnStartBottom').disabled = false;
+                document.getElementById('btnStartBottom').textContent = 'Start Test (Phase 1→6)';
+            }
+        }
+
+        // Auto-detect any currently Running test (for page refresh / new tab)
+        async function autoDetectRunningTest() {
+            try {
+                const resp = await fetch(`${API_BASE}/runs`);
+                const data = await resp.json();
+                if (data.runs) {
+                    // Find the most recent Running test that isn't stale (started < 30min ago)
+                    const now = Date.now();
+                    const running = data.runs.find(r => {
+                        if (r.status !== 'Running') return false;
+                        if (r.startTime) {
+                            const age = now - new Date(r.startTime).getTime();
+                            if (age > 120 * 60 * 1000) return false; // Skip if >120 min old
+                        }
+                        return true;
+                    });
+                    if (running) {
+                        currentRunId = running.runId;
+                        sessionStorage.setItem('currentRunId', running.runId);
+                        startPolling(running.runId);
+                        return;
+                    }
+                }
+            } catch (e) { console.error('Auto-detect error:', e); }
+            // No running test found — show the empty state
+            document.getElementById('progressContent').innerHTML = `
+                <div style="text-align:center;padding:60px 20px;color:#64748b;">
+                    <h3>No Active Test Run</h3>
+                    <p>Start a new test from the "New Test" tab to see live progress here.</p>
+                </div>`;
+        }
+
+        // Poll for progress
+        function startPolling(runId) {
+            if (pollInterval) clearInterval(pollInterval);
+            currentRunId = runId;
+            sessionStorage.setItem('currentRunId', runId);
+            updateProgress(runId);
+            pollInterval = setInterval(() => updateProgress(runId), 5000);
+        }
+
+        async function updateProgress(runId) {
+            try {
+                const resp = await fetch(`${API_BASE}/status/${runId}`);
+                const data = await resp.json();
+                renderProgress(data);
+                
+                if (data.status === 'Passed' || data.status === 'Failed') {
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+                    sessionStorage.removeItem('currentRunId');
+                    loadRunHistory();
+                }
+            } catch (err) {
+                console.error('Poll error:', err);
+            }
+        }
+
+        function renderProgress(data) {
+            // Ensure arrays (PowerShell single-item arrays serialize as objects)
+            const phaseResults = Array.isArray(data.phaseResults) ? data.phaseResults : (data.phaseResults ? [data.phaseResults] : []);
+            const logEntries = Array.isArray(data.logEntries) ? data.logEntries : (data.logEntries ? [data.logEntries] : []);
+            
+            const phases = [
+                { num: 1, name: 'Install Exporter' },
+                { num: 2, name: 'Setup AMS' },
+                { num: 3, name: 'Create Providers' },
+                { num: 4, name: 'Validate Data' },
+                { num: 5, name: 'Workbook & Alerts' },
+                { num: 6, name: 'Data Integrity' }
+            ];
+
+            const pct = Math.min(100, ((data.currentPhase - 1) / 6) * 100 + (data.status === 'Passed' ? 100/6 : 0));
+            const elapsed = data.duration ? `${Math.floor(data.duration/60)}m ${data.duration%60}s` : '...';
+
+            let phasesHtml = '';
+            phases.forEach(p => {
+                const result = phaseResults.find(r => r.Phase === `Phase${p.num}`);
+                let cls = '';
+                let statusText = 'Pending';
+                let phaseError = '';
+                if (result) {
+                    cls = result.Status.toLowerCase();
+                    statusText = `${result.Status} (${result.DurationSeconds}s)`;
+                    if (result.Status === 'Failed' && result.Message) {
+                        phaseError = `<div style="font-size:10px;color:#f87171;margin-top:4px;word-break:break-word;">${result.Message.substring(0,120).replace(/</g,'&lt;')}</div>`;
+                    }
+                } else if (p.num === data.currentPhase && data.status === 'Running') {
+                    cls = 'running';
+                    statusText = 'Running...';
+                }
+                phasesHtml += `<div class="progress-phase ${cls}"><div class="phase-num">Phase ${p.num}</div><div class="phase-name">${p.name}</div><div class="phase-status">${statusText}</div>${phaseError}</div>`;
+            });
+
+            const statusColor = data.status === 'Passed' ? '#22c55e' : data.status === 'Failed' ? '#ef4444' : '#f59e0b';
+            
+            // Error banner for failed runs
+            let errorBanner = '';
+            if (data.status === 'Failed' && data.error) {
+                errorBanner = `<div style="margin-top:12px;padding:12px 16px;background:#7f1d1d33;border:1px solid #ef4444;border-radius:8px;">
+                    <div style="font-size:11px;color:#fca5a5;font-weight:600;margin-bottom:4px;">Phase ${data.currentPhase} Error:</div>
+                    <div style="font-size:12px;color:#f87171;font-family:monospace;white-space:pre-wrap;">${(data.error||"").replace(/</g,'&lt;')}</div>
+                </div>`;
+            }
+
+            const reportBtn = data.reportUrl ? `<a href="${API_BASE}/report/${data.runId}" target="_blank" class="btn-primary" style="text-decoration:none;padding:10px 20px;font-size:13px;">View Full Report</a>` : '';
+            const cleanupBtn = (data.status === 'Passed' || data.status === 'Failed' || data.status === 'Abandoned') ? `<button class="btn-danger" onclick="runCleanup('${data.runId}')">Run Cleanup (Phase 7)</button>` : '';
+            const newTestBtn = (data.status === 'Failed' || data.status === 'Passed' || data.status === 'Abandoned') ? `<button class="btn-secondary" onclick="switchTabDirect('new-test')">Start New Test</button>` : '';
+
+            // Build retry buttons for failed/abandoned phases
+            let retryHtml = '';
+            const hasAllPhases = phaseResults.length >= 6 && phaseResults.every(r => r.Status === 'Passed');
+            if (data.status === 'Failed' || data.status === 'Abandoned' || (data.status === 'Passed' && !hasAllPhases)) {
+                const failedPhases = phaseResults.filter(r => r.Status === 'Failed');
+                if (failedPhases.length > 0) {
+                    const lastFailedNum = Math.max(...failedPhases.map(f => parseInt(f.Phase.replace('Phase',''))));
+                    const nextPhase = lastFailedNum + 1;
+                    const skipBtn = nextPhase <= 6 ? `<button class="btn-secondary" style="background:#0ea5e922;color:#7dd3fc;border:1px solid #0ea5e9;" onclick="retryFromPhase('${data.runId}', ${nextPhase})">
+                                Skip to Phase ${nextPhase} onwards
+                            </button>` : '';
+                    retryHtml = `<div style="margin-top:15px;padding:14px;background:#7f1d1d22;border:1px solid #ef4444;border-radius:8px;">
+                        <div style="font-size:12px;color:#f87171;margin-bottom:8px;font-weight:600;">Failed Phase(s) — Retry after fixing the issue:</div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            ${failedPhases.map(f => `<button class="btn-secondary" style="background:#ef444422;color:#fca5a5;border:1px solid #ef4444;" onclick="retryPhase('${data.runId}', ${f.Phase.replace('Phase','')})">
+                                Retry ${f.Phase} (${phases.find(p=>p.num==f.Phase.replace('Phase',''))?.name || ''})
+                            </button>`).join('')}
+                            <button class="btn-secondary" style="background:#f59e0b22;color:#fcd34d;border:1px solid #f59e0b;" onclick="retryFromPhase('${data.runId}', ${Math.min(...failedPhases.map(f => parseInt(f.Phase.replace('Phase',''))))})">
+                                Retry from Phase ${Math.min(...failedPhases.map(f => parseInt(f.Phase.replace('Phase',''))))} onwards
+                            </button>
+                            ${skipBtn}
+                        </div>
+                    </div>`;
+                } else if (data.status === 'Abandoned' || (data.status === 'Passed' && !hasAllPhases)) {
+                    // Abandoned or incomplete Passed — let user retry from next incomplete phase
+                    const completedPhaseNums = phaseResults.filter(r => r.Status === 'Passed').map(r => parseInt(r.Phase.replace('Phase','')));
+                    const resumePhase = completedPhaseNums.length > 0 ? Math.max(...completedPhaseNums) + 1 : (data.currentPhase || 1);
+                    const label = data.status === 'Abandoned' ? 'Run was abandoned' : 'Run incomplete (not all phases completed)';
+                    retryHtml = `<div style="margin-top:15px;padding:14px;background:#f59e0b22;border:1px solid #f59e0b;border-radius:8px;">
+                        <div style="font-size:12px;color:#fcd34d;margin-bottom:8px;font-weight:600;">${label} — Resume execution:</div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn-secondary" style="background:#f59e0b22;color:#fcd34d;border:1px solid #f59e0b;" onclick="retryFromPhase('${data.runId}', ${resumePhase})">
+                                Resume from Phase ${resumePhase} onwards
+                            </button>
+                        </div>
+                    </div>`;
+                }
+            }
+
+            // Build log panel — auto-expanded when running
+            let logHtml = '';
+            if (logEntries.length > 0) {
+                const isRunning = data.status === 'Running';
+                const logLines = logEntries.map(e => {
+                    const levelClass = e.message && (e.message.includes('FAILED') || e.message.includes('EXCEPTION')) ? 'color:#f87171;' 
+                        : e.message && e.message.includes('completed') ? 'color:#22c55e;' : '';
+                    return `<div class="log-line"><span class="log-time">${e.time}</span><span class="log-phase">P${e.phase}</span><span class="log-msg" style="${levelClass}">${(e.message||'').replace(/</g,'&lt;')}</span></div>`;
+                }).join('');
+                const expandedClass = isRunning ? ' expanded' : '';
+                const liveIndicator = isRunning ? '<span class="live-dot"></span>Live ' : '';
+                logHtml = `<div class="log-panel${expandedClass}">
+                    <div class="log-toggle" onclick="this.parentElement.classList.toggle('expanded')">
+                        ${liveIndicator}▶ Execution Log (${logEntries.length} entries)
+                    </div>
+                    <div class="log-content" id="logScrollArea">${logLines}</div>
+                </div>`;
+            }
+
+            document.getElementById('progressContent').innerHTML = `
+                <div class="progress-panel">
+                    <div class="progress-header">
+                        <h3>Test Run: ${data.runId}</h3>
+                        <span style="color:${statusColor};font-weight:600;">${data.status} | ${elapsed}</span>
+                    </div>
+                    <div class="progress-bar-container"><div class="progress-bar" style="width:${data.status==='Passed'?100:pct}%"></div></div>
+                    ${errorBanner}
+                    <div class="progress-phases">${phasesHtml}</div>
+                    ${logHtml}
+                    ${retryHtml}
+                    <div style="margin-top:20px;display:flex;gap:12px;justify-content:flex-end;">
+                        ${newTestBtn} ${reportBtn} ${cleanupBtn}
+                    </div>
+                </div>
+            `;
+
+            // Auto-scroll log to bottom when running
+            if (data.status === 'Running') {
+                const logArea = document.getElementById('logScrollArea');
+                if (logArea) logArea.scrollTop = logArea.scrollHeight;
+            }
+        }
+
+        // Cleanup
+        async function runCleanup(runId) {
+            if (!confirm('This will DELETE all AMS resources (monitor, providers, subnet). Reports are preserved. Continue?')) return;
+            
+            try {
+                const resp = await fetch(`${API_BASE}/cleanup/${runId}`, { method: 'POST' });
+                const result = await resp.json();
+                if (resp.ok) showToast('Cleanup completed', 'success');
+                else showToast(result.error || 'Cleanup failed', 'error');
+            } catch (err) {
+                showToast(`Cleanup error: ${err.message}`, 'error');
+            }
+        }
+
+        // Retry a single failed phase
+        async function retryPhase(runId, phaseNum) {
+            if (!confirm(`Retry Phase ${phaseNum} for run ${runId}?`)) return;
+            try {
+                const resp = await fetch(`${API_BASE}/retry`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ runId, phase: phaseNum, resumeAll: false })
+                });
+                const result = await resp.json();
+                if (resp.ok) {
+                    showToast(`Retrying Phase ${phaseNum}...`, 'success');
+                    startPolling(runId);
+                } else {
+                    showToast(result.error || 'Retry failed', 'error');
+                }
+            } catch (err) {
+                showToast(`Retry error: ${err.message}`, 'error');
+            }
+        }
+
+        // Resume from a failed phase onwards (re-run that phase + all remaining)
+        async function retryFromPhase(runId, fromPhase) {
+            if (!confirm(`Resume from Phase ${fromPhase} and continue through Phase 6?`)) return;
+            try {
+                const resp = await fetch(`${API_BASE}/retry`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ runId, phase: fromPhase, resumeAll: true })
+                });
+                const result = await resp.json();
+                if (resp.ok) {
+                    showToast(`Resuming from Phase ${fromPhase}...`, 'success');
+                    startPolling(runId);
+                } else {
+                    showToast(result.error || 'Resume failed', 'error');
+                }
+            } catch (err) {
+                showToast(`Resume error: ${err.message}`, 'error');
+            }
+        }
+
+        // History
+        async function loadRunHistory() {
+            try {
+                const resp = await fetch(`${API_BASE}/runs`);
+                const data = await resp.json();
+                const tbody = document.getElementById('runsBody');
+                
+                if (!data.runs || data.runs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#64748b;padding:40px;">No test runs yet</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = data.runs.map(r => {
+                    const errorSnippet = r.error ? r.error.substring(0, 120).replace(/</g,'&lt;') : '';
+                    const errorRow = r.error ? `<tr class="error-detail-row" id="err-${r.runId}" style="display:none;">
+                        <td colspan="8" style="padding:10px 16px;background:#1e1e2e;border-top:none;">
+                            <div style="font-size:11px;color:#f87171;font-family:monospace;white-space:pre-wrap;max-height:150px;overflow-y:auto;">
+                                <strong>Phase ${r.currentPhase || '?'} Error:</strong> ${r.error.replace(/</g,'&lt;')}
+                            </div>
+                            <button class="btn-secondary" style="margin-top:8px;font-size:11px;padding:4px 12px;" onclick="viewRunProgress('${r.runId}')">View Full Details</button>
+                        </td>
+                    </tr>` : '';
+                    const rowClick = r.status === 'Running'
+                        ? `viewRunProgress('${r.runId}')`
+                        : `toggleErrorRow('${r.runId}')`;
+                    return `<tr style="cursor:pointer;" onclick="${rowClick}" title="${r.status === 'Running' ? 'Click to view live progress' : (errorSnippet || 'Click to view details')}">`+`
+                        <td style="font-family:monospace;font-size:12px;">${r.runId}</td>
+                        <td>${r.sid}</td>
+                        <td>${r.clusterName}</td>
+                        <td>${r.os}</td>
+                        <td><span class="status-badge ${r.status.toLowerCase()}">${r.status}</span></td>
+                        <td>${r.duration ? Math.floor(r.duration/60) + 'm' : '-'}</td>
+                        <td>${r.startTime ? new Date(r.startTime).toLocaleDateString() + ' ' + new Date(r.startTime).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '-'}</td>
+                        <td>${r.reportUrl ? `<a href="${API_BASE}/report/${r.runId}" target="_blank" class="report-link" onclick="event.stopPropagation()">View Report</a>` : '-'}</td>
+                    </tr>${errorRow}`;
+                }).join('');
+            } catch (err) {
+                document.getElementById('runsBody').innerHTML = `<tr><td colspan="8" style="color:#f87171;">Error loading runs: ${err.message}</td></tr>`;
+            }
+        }
+
+        // Parse Resource Group Resource ID and auto-populate fields
+        function parseRgResourceId(resourceId) {
+            if (!resourceId) return;
+            const match = resourceId.match(/\/subscriptions\/([^\/]+)\/resourceGroups\/([^\/]+)/i);
+            if (match) {
+                document.getElementById('subscription_id').value = match[1];
+                document.getElementById('resource_group').value = match[2];
+                showToast('Auto-filled Subscription ID & Resource Group from Resource ID', 'success');
+            }
+        }
+
+        // Parse Cluster VNet Resource ID
+        function parseClusterVnetResourceId(resourceId) {
+            if (!resourceId) return;
+            const match = resourceId.match(/\/subscriptions\/([^\/]+)\/resourceGroups\/([^\/]+)\/providers\/Microsoft\.Network\/virtualNetworks\/([^\/]+)/i);
+            if (match) {
+                document.getElementById('cluster_vnet_rg').value = match[2];
+                document.getElementById('cluster_vnet_name').value = match[3];
+                showToast('Auto-filled Cluster VNet Name & Resource Group', 'success');
+            }
+        }
+
+        // Parse AMS VNet Resource ID (when different from cluster)
+        function parseAmsVnetResourceId(resourceId) {
+            if (!resourceId) return;
+            const match = resourceId.match(/\/subscriptions\/([^\/]+)\/resourceGroups\/([^\/]+)\/providers\/Microsoft\.Network\/virtualNetworks\/([^\/]+)/i);
+            if (match) {
+                document.getElementById('ams_vnet_rg').value = match[2];
+                document.getElementById('ams_vnet_name').value = match[3];
+                showToast('Auto-filled AMS VNet Name & Resource Group', 'success');
+            }
+        }
+
+        // Toggle AMS VNet section visibility
+        function toggleAmsVnet(sameVnet) {
+            document.getElementById('ams_vnet_section').style.display = sameVnet ? 'none' : 'block';
+            document.getElementById('peering_notice').style.display = sameVnet ? 'none' : 'block';
+        }
+
+        // Load sample config
+        function loadSampleConfig() {
+            document.getElementById('sap_sid').value = 'CHA';
+            document.getElementById('cluster_name').value = 'ha_ascs_cluster';
+            document.getElementById('os_type').value = 'SUSE';
+            document.getElementById('os_version').value = 'SLES 15 SP5';
+            document.getElementById('rg_resource_id').value = '/subscriptions/2b331373-3d36-4585-bdb9-d3364786e775/resourceGroups/PADM-AMS-RCA';
+            document.getElementById('subscription_id').value = '2b331373-3d36-4585-bdb9-d3364786e775';
+            document.getElementById('resource_group').value = 'PADM-AMS-RCA';
+            document.getElementById('location').value = 'northeurope';
+            document.getElementById('ams_monitor_name').value = 'PADM-AMS-HA-Test-Monitor';
+            document.getElementById('report_storage_account').value = '';
+            document.getElementById('report_storage_rg').value = '';
+            document.getElementById('cluster_vnet_resource_id').value = '/subscriptions/2b331373-3d36-4585-bdb9-d3364786e775/resourceGroups/ContosoVNETRG/providers/Microsoft.Network/virtualNetworks/CONTOSO-VNET-NE';
+            document.getElementById('cluster_vnet_name').value = 'CONTOSO-VNET-NE';
+            document.getElementById('cluster_vnet_rg').value = 'ContosoVNETRG';
+            document.getElementById('ams_same_vnet').checked = true;
+            document.getElementById('ams_vnet_section').style.display = 'none';
+            document.getElementById('peering_notice').style.display = 'none';
+            document.getElementById('subnet_name').value = 'padm-ha-test-subnet';
+            document.getElementById('subnet_cidr').value = '/28';
+            
+            const nodeRows = document.querySelectorAll('.node-row:not(:first-child)');
+            if (nodeRows[0]) {
+                nodeRows[0].querySelector('.node-hostname').value = 'chascs01l0c2';
+                nodeRows[0].querySelector('.node-ip').value = '10.8.1.41';
+                nodeRows[0].querySelector('.node-vm').value = 'LAB-NOEU-SAP01-CHA_chascs01l0c2';
+                nodeRows[0].querySelector('.node-vmrg').value = 'lab-noeu-sap01-cha';
+            }
+            if (nodeRows[1]) {
+                nodeRows[1].querySelector('.node-hostname').value = 'chascs02l0c2';
+                nodeRows[1].querySelector('.node-ip').value = '10.8.1.39';
+                nodeRows[1].querySelector('.node-vm').value = 'LAB-NOEU-SAP01-CHA_chascs02l0c2';
+                nodeRows[1].querySelector('.node-vmrg').value = 'lab-noeu-sap01-cha';
+            }
+            showToast('Sample config loaded', 'success');
+        }
+
+        // Clear form — reset all inputs to empty/defaults
+        function clearForm() {
+            document.getElementById('testForm').reset();
+            // Reset selects to defaults
+            document.getElementById('os_type').value = 'SUSE';
+            document.getElementById('location').value = '';
+            document.getElementById('execution_method').value = 'vm_run_command';
+            document.getElementById('poll_interval').value = '120';
+            document.getElementById('subnet_cidr').value = '/28';
+            // Clear resource ID fields
+            document.getElementById('rg_resource_id').value = '';
+            document.getElementById('cluster_vnet_resource_id').value = '';
+            // Reset AMS VNet toggle
+            document.getElementById('ams_same_vnet').checked = true;
+            document.getElementById('ams_vnet_section').style.display = 'none';
+            document.getElementById('peering_notice').style.display = 'none';
+            // Reset nodes to 2 empty rows
+            const editor = document.getElementById('nodeEditor');
+            const rows = editor.querySelectorAll('.node-row:not(:first-child)');
+            rows.forEach((row, i) => {
+                if (i < 2) {
+                    row.querySelectorAll('input').forEach(inp => inp.value = '');
+                } else {
+                    row.remove();
+                }
+            });
+            showToast('Form cleared', 'success');
+        }
+
+        // Helpers
+        function switchTabDirect(tab) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.nav-tabs button').forEach(b => b.classList.remove('active'));
+            document.getElementById(`tab-${tab}`).classList.add('active');
+            document.querySelectorAll('.nav-tabs button')[['new-test','progress','history'].indexOf(tab)].classList.add('active');
+            sessionStorage.setItem('activeTab', tab);
+        }
+
+        function showToast(msg, type) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = `toast ${type}`;
+            toast.style.display = 'block';
+            setTimeout(() => { toast.style.display = 'none'; }, 4000);
+        }
+
+        // Load history on page load
+        loadRunHistory();
+
+        // Restore tab from session on page load
+        const savedTab = sessionStorage.getItem('activeTab');
+        if (savedTab && savedTab !== 'new-test') {
+            switchTabDirect(savedTab);
+            if (savedTab === 'history') loadRunHistory();
+        }
+
+        // On page load, resume polling if there's a stored runId
+        const savedRunId = currentRunId || sessionStorage.getItem('currentRunId');
+        if (savedRunId) {
+            fetch(`${API_BASE}/status/${savedRunId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'Running') {
+                        if (savedTab !== 'history') switchTabDirect('progress');
+                        renderProgress(data);
+                        startPolling(savedRunId);
+                    } else {
+                        // Run is done — show final state if on progress tab
+                        if (savedTab === 'progress') renderProgress(data);
+                        sessionStorage.removeItem('currentRunId');
+                        currentRunId = null;
+                    }
+                })
+                .catch(() => {
+                    sessionStorage.removeItem('currentRunId');
+                    currentRunId = null;
+                });
+        } else if (savedTab === 'progress') {
+            // Only auto-detect if user was on progress tab
+            autoDetectRunningTest();
+        }
+
+        // Toggle error detail row in History
+        function toggleErrorRow(runId) {
+            const row = document.getElementById(`err-${runId}`);
+            if (row) {
+                row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+            } else {
+                // No inline error - go to progress view
+                viewRunProgress(runId);
+            }
+        }
+
+        // View full run details in Progress tab
+        function viewRunProgress(runId) {
+            // Stop any existing polling to prevent override
+            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+            currentRunId = runId;
+            sessionStorage.setItem('currentRunId', runId);
+            switchTabDirect('progress');
+            // Show loading state immediately so user sees feedback
+            document.getElementById('progressContent').innerHTML = `
+                <div style="text-align:center;padding:60px 20px;color:#64748b;">
+                    <div class="live-dot" style="display:inline-block;margin-right:8px;"></div>
+                    <span style="font-size:16px;">Loading run ${runId}...</span>
+                </div>`;
+            fetch(`${API_BASE}/status/${runId}`)
+                .then(r => r.json())
+                .then(data => {
+                    renderProgress(data);
+                    if (data.status === 'Running') startPolling(runId);
+                })
+                .catch(err => {
+                    document.getElementById('progressContent').innerHTML = `
+                        <div style="text-align:center;padding:60px 20px;color:#f87171;">
+                            <h3>Error loading run</h3><p>${err.message}</p>
+                            <button class="btn-secondary" onclick="viewRunProgress('${runId}')">Retry</button>
+                        </div>`;
+                });
+        }
+    </script>
+</body>
+</html>

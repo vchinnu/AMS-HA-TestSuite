@@ -1,0 +1,328 @@
+
+**************************
+
+***** Cluster overview **********
+
+***Columns used
+Prometheus_HaClusterExporter_CL
+TimeGenerated
+correlation_id_g
+value_d
+sid_s
+clusterName_s
+hostname_s
+name_s = ha_cluster_pacemaker_nodes
+name_s = ha_cluster_pacemaker_resources
+labels_s - status,node
+labels_s - status,role,managed
+****
+
+
+// of all currently running endpoints
+// find the most recent correlation id
+let upstatus = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(10min)
+| where name_s == "sapmon"
+| summarize arg_max(TimeGenerated, correlation_id_g, value_d) by sid_s, clusterName_s, hostname_s
+| project correlation_id_g;
+//identify the master (status = DC)
+let dcstatus = materialize(Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (upstatus)
+| where name_s == 'ha_cluster_pacemaker_nodes'
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where tostring(node_status['node']) == hostname_s
+| summarize arg_max(TimeGenerated, correlation_id_g) by sid_s, clusterName_s, hostname_s
+| project correlation_id_g);
+//find all pacemaker resources and their status from dc metrics
+( Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (dcstatus)
+| where name_s == "ha_cluster_pacemaker_resources" 
+| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| summarize 
+    resources_failed = countif(resources['status'] == 'failed' or resources['status'] == 'failed_ignored'), 
+    resources_blocked = countif(resources['status'] == 'blocked' or resources['status'] == 'orphaned'), 
+    resources_active = countif(resources['role'] == 'started' and resources['managed'] == 'true')
+    + countif(resources['role'] == 'master' and resources['managed'] == 'true')
+    + countif(resources['role'] == 'slave' and resources['managed'] == 'true'),
+    resources_unmanaged = countif(resources['managed'] == 'false'),
+    status_red = countif(resources['status'] == 'failed' or resources['status'] == 'failed_ignored'), 
+    status_yellow = countif(resources['status'] == 'blocked' or resources['status'] == 'orphaned'), 
+    status_green = countif(resources['status'] == 'active' and resources['managed'] == 'true'),
+    status_grey = countif(resources['managed'] == 'false')
+    by sid_s, clusterName_s)
+| union 
+//find all pacemaker nodes and their status from dc metrics
+( Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (dcstatus)
+| where name_s == "ha_cluster_pacemaker_nodes" 
+| where value_d == 1
+| extend  nodes = parse_json(labels_s)
+| summarize 
+    nodes_unclean = countif(nodes['status'] == 'unclean'), 
+    nodes_pending_shutdown = countif(nodes['status'] == 'pending' or nodes['status'] == 'shutdown'  or nodes['status'] == 'standby_onfail'), 
+    nodes_online = countif(nodes['status'] == 'online'),
+    nodes_maint_standby = countif(nodes['status'] == 'maintenance' or nodes['status'] == 'standby'),
+    status_red = countif(nodes['status'] == 'unclean'), 
+    status_yellow = countif(nodes['status'] == 'pending' or nodes['status'] == 'shutdown'  or nodes['status'] == 'standby_onfail'), 
+    status_green = countif(nodes['status'] == 'online' or nodes['status'] == 'dc'),
+    status_grey = countif(nodes['status'] == 'maintenance' or nodes['status'] == 'standby')
+    by sid_s, clusterName_s)   
+| union 
+//find all exporter up-status as additional metric
+(Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (upstatus)
+| where name_s == 'up'
+| summarize status_grey = case(countif(value_d==1) == 0, 1, 0)//only count grey status if there is no (0) endpoints up
+    by sid_s, clusterName_s)
+//summarize per cluster per sid
+| summarize sum(resources_failed),sum(resources_blocked),sum(resources_active),sum(resources_unmanaged),sum(nodes_unclean),sum(nodes_pending_shutdown),sum(nodes_online),sum(nodes_maint_standby),cluster_status = case(sum(status_red) > 0, 'red', sum(status_yellow) > 0, 'yellow', sum(status_grey) > 0, 'grey', sum(status_green) > 0, 'green', 'greyblue')  by sid_s, clusterName_s
+| project cluster_status,sum_resources_failed,sum_resources_blocked, sum_resources_active, sum_resources_unmanaged,sum_nodes_unclean, sum_nodes_pending_shutdown,sum_nodes_online,sum_nodes_maint_standby,sid_s,clusterName_s
+
+
+*********************
+
+***** CLI location constraints
+
+***Columns used
+Prometheus_HaClusterExporter_CL
+TimeGenerated
+value_d
+correlation_id_g
+sid_s
+clusterName_s
+hostname_s
+name_s = ha_cluster_pacemaker_location_constraints
+labels_s - ststus, node, constraint
+*****
+
+let master = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(10min)
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where sid_s == '{selected_sid}'
+| where clusterName_s == '{selected_clustername}'
+| where tostring(node_status['node']) == hostname_s
+| summarize arg_max(TimeGenerated, correlation_id_g, value_d) by sid_s, clusterName_s, hostname_s
+| top 1 by TimeGenerated
+| project correlation_id_g;
+//find all pacemaker resources and their status from dc metrics
+Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+//| where name_s == 'ha_cluster_pacemaker_location_constraints' 
+| extend  resources = parse_json(labels_s)
+| where ( resources['constraint'] startswith 'cli-ban' ) or ( resources['constraint'] startswith 'cli-prefer' )
+| project   resource_constraint=resources['constraint'],Impact="warning"
+
+
+****** Resource Status ************
+***Columns used
+Prometheus_HaClusterExporter_CL
+TimeGenerated
+value_d
+sid_s
+clusterName_s
+hostname_s
+correlation_id_g
+name_s - ha_cluster_pacemaker_resources
+labels_s - agent, node, resource, managed, role, status
+*****
+
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation ID from that node only
+let master = materialize(Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(40min)
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where sid_s == '{selected_sid}'
+| where clusterName_s == '{selected_clustername}'
+| where tostring(node_status['node']) == hostname_s
+| summarize arg_max(TimeGenerated, correlation_id_g, value_d) by sid_s, clusterName_s, hostname_s
+| top 1 by TimeGenerated
+| project correlation_id_g);
+//find all pacemaker resources and their status from dc metrics
+Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| where name_s == 'ha_cluster_pacemaker_resources' 
+| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| where isnotnull(resources['agent']) 
+| where strlen(resources['node']) > 0
+| project  correlation_id_g, name_s, value_d, resource_agent = resources['agent'], resource_resource = resources['resource'], resource_node = resources['node'], resource_managed = resources['managed'], resource_role= resources['role'], resource_status=resources['status']
+//| summarize count() by correlation_id_g, name_s, value_d,tostring(resource_agent),tostring(resource_resource), tostring(resource_node),tostring(resource_managed)
+| summarize 
+    status_managed = countif(tolower(resource_managed) == 'true'), 
+    status_active = countif(tolower(resource_status) == 'active')
+                    + countif(tolower(resource_role) == 'started' and resource_managed == 'true')
+            + countif(tolower(resource_role) == 'master' and resource_managed == 'true')
+            + countif(tolower(resource_role) == 'slave' and resource_managed == 'true'),
+    status_orphaned = countif(tolower(resource_status) == 'orphaned'),
+    status_blocked = countif(tolower(resource_status) == 'blocked'),
+    status_failed = countif(tolower(resource_status) == 'failed'),
+    status_failure_ignored = countif(tolower(resource_status) == 'failure_ignored'),
+    status_role_master = countif(tolower(resource_role)=='master'),
+    status_role_slave = countif(tolower(resource_role)=='slave')
+    by correlation_id_g,name_s,value_d,tostring(resource_agent),tostring(resource_resource),tostring(resource_node)
+| summarize resource_managed = case(sum(status_managed) > 0,"true","false"), resource_status = case(sum(status_failure_ignored) > 0, 'failure_ignored', sum(status_failed) > 0, 'failed', sum(status_blocked) > 0, 'blocked', sum(status_orphaned) > 0, 'orphaned', sum(status_active) > 0, 'active', 'inactive'), resource_role = case(sum(status_role_master)>0,'primary',sum(status_role_slave)>0,'secondary','') by correlation_id_g,name_s,value_d,tostring(resource_agent),tostring(resource_resource),tostring(resource_node)
+
+
+
+********** Node Status ************
+
+***Columns used
+
+Prometheus_HaClusterExporter_CL
+TimeGenerated
+value_d
+hostname_s
+sid_s
+clusterName_s
+correlation_id_g
+name_s = ha_cluster_pacemaker_nodes
+labels_s - status, node, type
+******
+
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation ID from that node only
+let master = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(10min)
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where tostring(node_status['node']) == hostname_s
+| where sid_s == '{selected_sid}'
+| where clusterName_s=='{selected_clustername}'
+| summarize arg_max(TimeGenerated, correlation_id_g) by sid_s, clusterName_s, hostname_s
+| top 1 by TimeGenerated
+| project correlation_id_g;
+Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| where name_s == "ha_cluster_pacemaker_nodes"
+| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| project hostname_s, correlation_id_g, resources['node'], resources['type'], resources['status'], value_d
+| order by tostring(resources_node) asc
+
+**************
+
+****** Node status over time ***********
+***Columns used
+Prometheus_HaClusterExporter_CL
+TimeGenerated
+value_d
+hostname_s
+sid_s
+clusterName_s
+correlation_id_g
+name_s = ha_cluster_pacemaker_nodes
+labels_s - status,node
+
+****
+
+let local_selected_sid = '{selected_sid}';
+let local_selected_clustername = '{selected_clustername}';
+let local_selected_hostname =  '{selected_hostname}';
+let local_timeframe_start = {node_timerange:start} ;
+let local_timeframe_end = {node_timerange:end} ;
+//
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation ID from that node only
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation IDs from that node only
+let master = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > local_timeframe_start
+| where TimeGenerated < local_timeframe_end
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where tostring(node_status['node']) == hostname_s
+| where sid_s == local_selected_sid
+| where clusterName_s==local_selected_clustername
+//| summarize TimeGenerated, correlation_id_g by sid_s, clusterName_s, hostname_s
+| project correlation_id_g;
+//master
+let workdata=materialize(Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| where name_s == "ha_cluster_pacemaker_nodes"
+| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| extend nodename=tostring(resources['node'])
+| where nodename == local_selected_hostname 
+//| where nodename in ( {selected_hostname} )
+| project TimeGenerated, nodename, node_status=resources['status'], value=value_d);
+//workdata
+let ts3=workdata
+| where node_status == 'dc'
+| order by TimeGenerated desc;
+let ts2=workdata
+| where node_status == 'online'
+| order by TimeGenerated desc;
+let ts1=workdata
+| where node_status == 'expected_up'
+| order by TimeGenerated desc;
+ts1 
+| join kind=leftouter ( ts2 ) on TimeGenerated,nodename
+| join kind=leftouter ( ts3 ) on TimeGenerated,nodename
+| project TimeGenerated, nodename, expected_up=value, is_online=value1, is_dc=value2
+| order by TimeGenerated desc;
+
+************************************
+
+****** SAP Resource status over time
+***Columns used
+Prometheus_HaClusterExporter_CL
+TimeGenerated
+value_d
+sid_s
+correlation_id_g
+value_d
+name_s = ha_cluster_pacemaker_resources
+name_s = ha_cluster_pacemaker_migration_threshold
+name_s = ha_cluster_pacemaker_fail_count
+labels_s - status,node,resource,agent
+****
+
+
+let local_selected_sid = '{selected_sid}';
+let local_selected_clustername = '{selected_clustername}';
+let local_selected_resource = '{selected_resource}';
+let local_timeframe_start = {param_resource_timerange:start} ;
+let local_timeframe_end = {param_resource_timerange:end} ;
+//
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation ID from that node only
+let master = materialize(Prometheus_HaClusterExporter_CL
+| where TimeGenerated > local_timeframe_start
+| where TimeGenerated < local_timeframe_end
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where sid_s == local_selected_sid
+| where clusterName_s == local_selected_clustername
+| where tostring(node_status['node']) == hostname_s
+| project correlation_id_g);
+//find all pacemaker resources and their status from dc metrics
+let clusterdata = materialize(Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+//| where name_s == 'ha_cluster_pacemaker_resources' 
+//| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| where resources['resource'] == local_selected_resource
+| project TimeGenerated, name_s,resource_agent = resources['agent'],  resource_node = resources['node'], value = value_d );
+let c1 = clusterdata
+| where name_s == 'ha_cluster_pacemaker_migration_threshold' ;
+let c2 = clusterdata
+| where name_s == 'ha_cluster_pacemaker_fail_count' ;
+c1 | join c2 on TimeGenerated 
+| project TimeGenerated, node=resource_node, threshold = value, failcount = value1
+
+*********************

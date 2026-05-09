@@ -1,0 +1,16 @@
+# User-specific config with secrets
+config.yaml
+
+# Reports generated during test runs
+reports/
+
+# Log files
+logs/
+
+# Private keys
+*.pem
+*.key
+privatekey.txt
+
+# Deployment artifacts
+*.zip

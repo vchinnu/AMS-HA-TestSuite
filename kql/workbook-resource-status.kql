@@ -1,0 +1,38 @@
+// Workbook Query: Resource Status
+// Shows cluster resource status (agent, node, role, managed) from DC metrics
+// Table: Prometheus_HaClusterExporter_CL
+// Parameters: {{SID}}, {{CLUSTER_NAME}}
+
+let master = materialize(Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(40min)
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where sid_s == '{{SID}}'
+| where clusterName_s == '{{CLUSTER_NAME}}'
+| where tostring(node_status['node']) == hostname_s
+| summarize arg_max(TimeGenerated, correlation_id_g, value_d) by sid_s, clusterName_s, hostname_s
+| top 1 by TimeGenerated
+| project correlation_id_g);
+Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| where name_s == 'ha_cluster_pacemaker_resources' 
+| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| where isnotnull(resources['agent']) 
+| where strlen(resources['node']) > 0
+| project  correlation_id_g, name_s, value_d, resource_agent = resources['agent'], resource_resource = resources['resource'], resource_node = resources['node'], resource_managed = resources['managed'], resource_role= resources['role'], resource_status=resources['status']
+| summarize 
+    status_managed = countif(tolower(resource_managed) == 'true'), 
+    status_active = countif(tolower(resource_status) == 'active')
+                    + countif(tolower(resource_role) == 'started' and resource_managed == 'true')
+            + countif(tolower(resource_role) == 'master' and resource_managed == 'true')
+            + countif(tolower(resource_role) == 'slave' and resource_managed == 'true'),
+    status_orphaned = countif(tolower(resource_status) == 'orphaned'),
+    status_blocked = countif(tolower(resource_status) == 'blocked'),
+    status_failed = countif(tolower(resource_status) == 'failed'),
+    status_failure_ignored = countif(tolower(resource_status) == 'failure_ignored'),
+    status_role_master = countif(tolower(resource_role)=='master'),
+    status_role_slave = countif(tolower(resource_role)=='slave')
+    by correlation_id_g,name_s,value_d,tostring(resource_agent),tostring(resource_resource),tostring(resource_node)
+| summarize resource_managed = case(sum(status_managed) > 0,"true","false"), resource_status = case(sum(status_failure_ignored) > 0, 'failure_ignored', sum(status_failed) > 0, 'failed', sum(status_blocked) > 0, 'blocked', sum(status_orphaned) > 0, 'orphaned', sum(status_active) > 0, 'active', 'inactive'), resource_role = case(sum(status_role_master)>0,'primary',sum(status_role_slave)>0,'secondary','') by correlation_id_g,name_s,value_d,tostring(resource_agent),tostring(resource_resource),tostring(resource_node)

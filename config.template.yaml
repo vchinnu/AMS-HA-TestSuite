@@ -1,0 +1,84 @@
+# ============================================================================
+# HA Cluster E2E Test Automation - Configuration Template
+# ============================================================================
+# Copy this file to config.yaml and fill in your values.
+# Fields marked [REQUIRED] must be provided. Others have defaults.
+# ============================================================================
+
+# --- Azure Subscription & Resource Group ---
+subscription_id: ""                    # [REQUIRED] Azure subscription ID
+resource_group: "AMS-HACluster-Test-RG" # Resource group for AMS monitor (created if not exists)
+location: "eastus"                     # Azure region
+
+# --- OS & Cluster Details ---
+os_type: "RHEL"                        # [REQUIRED] RHEL or SUSE
+os_version: "8.8"                      # OS version (for tracking/reporting)
+sap_sid: "X01"                         # [REQUIRED] SAP System ID
+cluster_name: "hacluster"              # Pacemaker cluster name
+
+# --- Cluster Nodes ---
+# [REQUIRED] At least 2 nodes. Add more entries for larger clusters.
+nodes:
+  - hostname: "node1"
+    ip_address: "10.0.1.5"
+    fqdn: "node1.sap.contoso.com"
+    vm_name: "sap-node1-vm"            # Azure VM name (for Run Command)
+    vm_resource_group: ""              # VM's resource group (if different from above)
+  - hostname: "node2"
+    ip_address: "10.0.1.6"
+    fqdn: "node2.sap.contoso.com"
+    vm_name: "sap-node2-vm"
+    vm_resource_group: ""
+
+# --- VNet & Subnet for AMS ---
+vnet:
+  name: "ams-ha-test-vnet"
+  resource_group: ""                   # VNet RG (defaults to resource_group above)
+  address_space: "10.1.0.0/24"        # Used only if create_new=true
+  create_new: false                    # Set true to create a new VNet
+subnet:
+  name: "ams-ha-test-subnet"
+  cidr: "10.1.0.240/28"              # /28 = 14 usable IPs (sufficient for testing)
+
+# --- VNet Peering (auto-created if connectivity check fails) ---
+cluster_vnet:
+  name: ""                             # VNet where cluster VMs reside
+  resource_group: ""                   # RG of cluster VNet
+
+# --- AMS Monitor ---
+ams_monitor_name: "AMS-HACluster-Test-Monitor"
+managed_resource_group: ""             # Auto-generated if empty: MRG_<monitor_name>
+
+# --- Log Analytics ---
+log_analytics_workspace_id: ""         # [REQUIRED for Phase 4/5] LA workspace resource ID
+log_analytics_workspace_name: ""       # Workspace name (for KQL queries)
+
+# --- SSH / Execution Method ---
+# Method to execute commands on cluster VMs:
+#   "vm_run_command" - Uses Invoke-AzVMRunCommand (recommended, no SSH needed)
+#   "bastion"        - Uses Azure Bastion SSH tunnel
+#   "both"           - Try VM Run Command first, fall back to Bastion
+execution_method: "vm_run_command"
+
+# Bastion details (only needed if execution_method includes bastion)
+bastion:
+  name: ""                             # Bastion host name
+  resource_group: ""                   # Bastion RG (defaults to cluster_vnet.resource_group)
+  ssh_username: "azureadm"            # SSH username
+  private_key_path: ""                 # Path to SSH private key file (local)
+
+# --- Report Persistence Storage ---
+# Reports are stored in a SEPARATE storage account so they survive AMS cleanup (Phase 7).
+# [REQUIRED] Provide an RG where the storage account will be created/reused.
+# If left empty, defaults to the main resource_group above (WARNING: lost if RG is deleted).
+report_storage:
+  resource_group: ""                   # Dedicated RG for reports (e.g., "MyTeam-Reports-RG")
+  storage_account_name: ""             # Auto-generated if empty: "haclusterrpt<hash>"
+  container_name: "ha-test-reports"    # Blob container for HTML reports
+  table_name: "HaClusterTestRuns"      # Table for run metadata / history
+
+# --- Test Behavior ---
+cleanup_after_test: false              # If true, Phase 6 runs automatically after Phase 5
+auto_confirm_destructive: false        # If true, skip confirmation for destructive ops
+poll_interval_seconds: 120             # How often to poll LA for data (Phase 4)
+poll_max_wait_minutes: 20             # Max wait time for data to appear in LA

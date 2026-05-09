@@ -1,0 +1,15 @@
+// Validate data flow into Log Analytics for HA Cluster providers
+// Table: Prometheus_HaClusterExporter_CL
+// Parameters: {{SID}}, {{CLUSTER_NAME}}
+
+Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(30m)
+| where sid_s == '{{SID}}'
+| where clusterName_s == '{{CLUSTER_NAME}}'
+| summarize 
+    RowCount = count(),
+    DistinctMetrics = dcount(name_s),
+    DistinctHosts = dcount(hostname_s),
+    OldestRecord = min(TimeGenerated),
+    NewestRecord = max(TimeGenerated)
+| extend DataLagMinutes = datetime_diff('minute', now(), NewestRecord)
