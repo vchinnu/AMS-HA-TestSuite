@@ -14,3 +14,10 @@ privatekey.txt
 
 # Deployment artifacts
 *.zip
+
+# React app build output & dependencies
+azure-dashboard/static-webapp/node_modules/
+azure-dashboard/static-webapp/dist/
+
+# Old HTML backup
+azure-dashboard/static-webapp/index-old.html
