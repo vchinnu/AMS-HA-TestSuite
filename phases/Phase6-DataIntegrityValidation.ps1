@@ -66,8 +66,22 @@ function Invoke-Phase6 {
 
     Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Execution method: $execMethod"
 
-    # Shell command to scrape exporter (same for both methods)
-    $scrapeScript = 'curl -s http://localhost:9664/metrics | grep "^ha_cluster_pacemaker_nodes" | grep " 1$"; curl -s http://localhost:9664/metrics | grep "^ha_cluster_pacemaker_resources" | grep "status=\"active\""'
+    # Determine exporter endpoint based on OS type
+    # SUSE: prometheus-ha_cluster_exporter on port 9664
+    # RHEL: pcp + pcp-pmda-hacluster + pmproxy on port 44322
+    $osType = $Config['os_type']
+    if ($osType -eq 'RHEL') {
+        $exporterPort = 44322
+        $exporterUrl = "http://localhost:${exporterPort}/metrics?names=ha_cluster"
+    } else {
+        # Default to SUSE
+        $exporterPort = 9664
+        $exporterUrl = "http://localhost:${exporterPort}/metrics"
+    }
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "OS type: $osType — using exporter endpoint: $exporterUrl"
+
+    # Shell command to scrape exporter (OS-aware endpoint)
+    $scrapeScript = 'curl -s ' + $exporterUrl + ' | grep "^ha_cluster_pacemaker_nodes" | grep " 1$"; curl -s ' + $exporterUrl + ' | grep "^ha_cluster_pacemaker_resources" | grep "status=\"active\""'
 
     foreach ($node in $nodes) {
         $hostname = $node['hostname']

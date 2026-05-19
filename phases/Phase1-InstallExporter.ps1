@@ -199,7 +199,7 @@ function Invoke-Phase1 {
     }
 }
 
-# Execute if called directly
-if ($Config) {
-    Invoke-Phase1 -Config $Config
+# Only auto-invoke when run directly (not dot-sourced by orchestrator)
+if ($MyInvocation.InvocationName -ne '.') {
+    if ($Config) { Invoke-Phase1 -Config $Config }
 }

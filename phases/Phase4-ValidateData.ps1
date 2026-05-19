@@ -94,23 +94,73 @@ Prometheus_HaClusterExporter_CL
 "@
     $metricResult = Invoke-KqlQuery -WorkspaceId $workspaceId -Query $metricQuery -Timespan 'PT1H' -Phase $PhaseName
 
-    $expectedMetricPrefixes = @(
+    # Required exporter metrics — workbook queries depend on these
+    $requiredExporterPrefixes = @(
         'ha_cluster_pacemaker_nodes',
-        'ha_cluster_pacemaker_resources',
+        'ha_cluster_pacemaker_resources'
+    )
+
+    # Required AMS infrastructure metrics — workbook correlation depends on these
+    $requiredInfraMetrics = @(
+        'sapmon'    # Collector heartbeat: used by workbook-cluster-overview to find latest correlation_id
+    )
+
+    # Warn-only infrastructure metrics — used by workbook but absence doesn't break pipeline
+    $warnInfraMetrics = @(
+        'up'        # Exporter liveness: used by cluster-overview grey status only; AMS HA collector may not forward this
+    )
+
+    # Optional exporter metrics — no workbook queries consume these today, warn only
+    $optionalExporterPrefixes = @(
         'ha_cluster_corosync',
         'ha_cluster_sbd'
     )
 
     $foundMetrics = if ($metricResult.Results) { $metricResult.Results | ForEach-Object { $_.name_s } } else { @() }
-    $missingPrefixes = @()
+    $missingRequired = @()
+    $missingOptional = @()
 
-    foreach ($prefix in $expectedMetricPrefixes) {
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "--- Required exporter metrics (workbook-critical) ---"
+    foreach ($prefix in $requiredExporterPrefixes) {
         $found = $foundMetrics | Where-Object { $_ -like "$prefix*" }
         if ($found) {
             Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Found metric family: $prefix ($($found.Count) variants)"
         } else {
-            Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "Missing metric family: $prefix"
-            $missingPrefixes += $prefix
+            Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "MISSING required metric family: $prefix (workbook queries will fail)"
+            $missingRequired += $prefix
+        }
+    }
+
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "--- Required AMS infrastructure metrics (correlation-critical) ---"
+    foreach ($metric in $requiredInfraMetrics) {
+        $found = $foundMetrics | Where-Object { $_ -eq $metric }
+        if ($found) {
+            Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Found infrastructure metric: $metric"
+        } else {
+            Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "MISSING required infrastructure metric: $metric (workbook correlation will break)"
+            $missingRequired += $metric
+        }
+    }
+
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "--- Warn-only infrastructure metrics (non-blocking) ---"
+    foreach ($metric in $warnInfraMetrics) {
+        $found = $foundMetrics | Where-Object { $_ -eq $metric }
+        if ($found) {
+            Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Found infrastructure metric: $metric"
+        } else {
+            Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "Infrastructure metric not present: $metric (cluster-overview grey status may not render, but pipeline works)"
+            $missingOptional += $metric
+        }
+    }
+
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "--- Optional exporter metrics (informational) ---"
+    foreach ($prefix in $optionalExporterPrefixes) {
+        $found = $foundMetrics | Where-Object { $_ -like "$prefix*" }
+        if ($found) {
+            Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Found optional metric family: $prefix ($($found.Count) variants)"
+        } else {
+            Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "Optional metric family not present: $prefix (no workbook depends on this today)"
+            $missingOptional += $prefix
         }
     }
 
@@ -131,15 +181,16 @@ Prometheus_HaClusterExporter_CL
     }
 
     $duration = [int](New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds
-    if ($missingPrefixes.Count -eq 0) {
-        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "All expected metric families present in LA" -DurationSeconds $duration
-    } elseif ($missingPrefixes.Count -le 1) {
-        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "Most metrics present; missing: $($missingPrefixes -join ', ')" -DurationSeconds $duration
+    if ($missingRequired.Count -eq 0 -and $missingOptional.Count -eq 0) {
+        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "All required and optional metric families present in LA" -DurationSeconds $duration
+    } elseif ($missingRequired.Count -eq 0) {
+        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "All required metrics present. Optional missing: $($missingOptional -join ', ')" -DurationSeconds $duration
     } else {
-        Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message "Missing metric families: $($missingPrefixes -join ', ')" -DurationSeconds $duration
+        Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message "Missing REQUIRED metrics: $($missingRequired -join ', '). Workbook/correlation will fail." -DurationSeconds $duration
     }
 }
 
-if ($Config) {
-    Invoke-Phase4 -Config $Config
+# Only auto-invoke when run directly (not dot-sourced by orchestrator)
+if ($MyInvocation.InvocationName -ne '.') {
+    if ($Config) { Invoke-Phase4 -Config $Config }
 }

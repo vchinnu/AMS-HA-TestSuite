@@ -136,6 +136,7 @@ function Invoke-Phase3 {
     }
 }
 
-if ($Config) {
-    Invoke-Phase3 -Config $Config
+# Only auto-invoke when run directly (not dot-sourced by orchestrator)
+if ($MyInvocation.InvocationName -ne '.') {
+    if ($Config) { Invoke-Phase3 -Config $Config }
 }

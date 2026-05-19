@@ -169,6 +169,7 @@ function Invoke-Phase2 {
     Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "AMS infrastructure ready (RG + VNet + Subnet + Monitor)" -DurationSeconds $duration
 }
 
-if ($Config) {
-    Invoke-Phase2 -Config $Config
+# Only auto-invoke when run directly (not dot-sourced by orchestrator)
+if ($MyInvocation.InvocationName -ne '.') {
+    if ($Config) { Invoke-Phase2 -Config $Config }
 }
