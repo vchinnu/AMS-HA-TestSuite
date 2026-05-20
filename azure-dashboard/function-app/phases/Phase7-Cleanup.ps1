@@ -124,6 +124,7 @@ function Invoke-Phase7 {
     Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "Cleanup completed" -DurationSeconds $duration
 }
 
-if ($Config) {
+# Execute only when script is run directly (not dot-sourced by orchestrator)
+if ($MyInvocation.InvocationName -ne '.' -and $Config) {
     Invoke-Phase7 -Config $Config
 }

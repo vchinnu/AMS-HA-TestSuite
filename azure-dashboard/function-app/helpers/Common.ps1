@@ -216,9 +216,22 @@ function Invoke-VMCommand {
         [string]$Phase
     )
 
+    # --- Resolve VM identity from vm_resource_id or legacy fields ---
     $vmResourceId = $Node['vm_resource_id']
-    $vmName = if ($vmResourceId) { ($vmResourceId -split '/')[-1] } else { $Node['vm_name'] }
-    $vmRg = if ($Node['vm_resource_group']) { $Node['vm_resource_group'] } else { $Config['resource_group'] }
+    $crossSub = $false
+
+    if ($vmResourceId -and $vmResourceId -match '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.Compute/virtualMachines/([^/]+)') {
+        $vmSubId = $Matches[1]
+        $vmRg    = $Matches[2]
+        $vmName  = $Matches[3]
+        # Determine if VM is in a different subscription than the test subscription
+        $crossSub = ($vmSubId -ne $Config['subscription_id'])
+        Write-PhaseLog -Phase $Phase -Level 'INFO' -Message "Resolved VM from resource ID: $vmName (RG=$vmRg, Sub=$vmSubId, CrossSub=$crossSub)"
+    } else {
+        $vmName = $Node['vm_name'] ?? $Node['hostname']
+        $vmRg   = $Node['vm_resource_group'] ?? $Config['resource_group']
+    }
+
     $method = $Config['execution_method']
 
     if ($method -eq 'vm_run_command' -or $method -eq 'both') {
@@ -226,11 +239,7 @@ function Invoke-VMCommand {
         
         # Check for existing managed run commands (informational only - do NOT delete them)
         try {
-            if ($vmResourceId) {
-                $existingCmds = Get-AzVMRunCommand -ResourceId "$vmResourceId/runCommands" -ErrorAction SilentlyContinue
-            } else {
-                $existingCmds = Get-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName -ErrorAction SilentlyContinue
-            }
+            $existingCmds = Get-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName -ErrorAction SilentlyContinue
             $activeCmds = $existingCmds | Where-Object { $_.ProvisioningState -in @('Creating', 'Updating', 'Deleting') }
             if ($activeCmds -and $activeCmds.Count -gt 0) {
                 $cmdNames = ($activeCmds | ForEach-Object { "$($_.Name)($($_.ProvisioningState))" }) -join ', '
@@ -240,20 +249,27 @@ function Invoke-VMCommand {
             Write-PhaseLog -Phase $Phase -Level 'INFO' -Message "Could not check existing run commands: $_"
         }
         
+        # Switch Azure context if VM is in a different subscription
+        $originalContext = $null
+        if ($crossSub) {
+            try {
+                $originalContext = Get-AzContext
+                Set-AzContext -Subscription $vmSubId -ErrorAction Stop | Out-Null
+                Write-PhaseLog -Phase $Phase -Level 'INFO' -Message "Switched context to VM subscription: $vmSubId"
+            } catch {
+                Write-PhaseLog -Phase $Phase -Level 'ERROR' -Message "Failed to switch to VM subscription $vmSubId`: $_"
+                return @{ Success = $false; Output = ''; Error = "Cannot switch to VM subscription: $_"; Method = 'vm_run_command' }
+            }
+        }
+
         # Retry loop for 409 Conflict (other run commands in progress)
         $maxRetries = 10
         $retryDelay = 45  # seconds (total wait: up to ~7.5 min)
         for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
             try {
-                if ($vmResourceId) {
-                    $result = Invoke-AzVMRunCommand -ResourceId $vmResourceId `
-                        -CommandId 'RunShellScript' -ScriptString $ScriptContent `
-                        -ErrorAction Stop
-                } else {
-                    $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
-                        -CommandId 'RunShellScript' -ScriptString $ScriptContent `
-                        -ErrorAction Stop
-                }
+                $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
+                    -CommandId 'RunShellScript' -ScriptString $ScriptContent `
+                    -ErrorAction Stop
                 
                 # Extract output - handle BOTH Az.Compute SDK formats:
                 # Old: ComponentStatus/StdOut/succeeded + ComponentStatus/StdErr/succeeded
@@ -307,6 +323,10 @@ function Invoke-VMCommand {
                     $errPreview = if ($stderr.Length -gt 300) { $stderr.Substring(0, 300) } else { $stderr }
                     Write-PhaseLog -Phase $Phase -Level 'WARN' -Message "StdErr from $vmName`: $errPreview"
                 }
+                # Restore original context before returning
+                if ($crossSub -and $originalContext) {
+                    Set-AzContext -Subscription $originalContext.Subscription.Id -ErrorAction SilentlyContinue | Out-Null
+                }
                 return @{ Success = $true; Output = $stdout; Error = $stderr; Method = 'vm_run_command' }
             }
             catch {
@@ -317,6 +337,10 @@ function Invoke-VMCommand {
                     continue
                 }
                 Write-PhaseLog -Phase $Phase -Level 'WARN' -Message "VM Run Command failed on $vmName`: $errMsg"
+                # Restore original context before returning
+                if ($crossSub -and $originalContext) {
+                    Set-AzContext -Subscription $originalContext.Subscription.Id -ErrorAction SilentlyContinue | Out-Null
+                }
                 if ($method -ne 'both') {
                     return @{ Success = $false; Output = ''; Error = $errMsg; Method = 'vm_run_command' }
                 }

@@ -138,6 +138,18 @@ body {
   font-size: 12px;
 }
 .btn-remove:hover { background: #ef444455; }
+.btn-resolve {
+  background: #0ea5e922;
+  color: #0ea5e9;
+  border: 1px solid #0ea5e944;
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+}
+.btn-resolve:hover:not(:disabled) { background: #0ea5e944; }
+.btn-resolve:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-add-node {
   background: #16213e;
   color: #0ea5e9;

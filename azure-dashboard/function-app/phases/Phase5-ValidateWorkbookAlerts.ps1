@@ -143,6 +143,7 @@ function Invoke-Phase5 {
     }
 }
 
-if ($Config) {
+# Execute only when script is run directly (not dot-sourced by orchestrator)
+if ($MyInvocation.InvocationName -ne '.' -and $Config) {
     Invoke-Phase5 -Config $Config
 }

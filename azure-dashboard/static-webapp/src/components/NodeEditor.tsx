@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import type { ClusterNode } from '../types';
 import { useApp } from '../context/AppContext';
+import * as api from '../api';
 
 interface Props {
   nodes: ClusterNode[];
@@ -15,12 +17,54 @@ const EMPTY_NODE: ClusterNode = {
 
 export default function NodeEditor({ nodes, onChange }: Props) {
   const { showToast } = useApp();
+  const [resolving, setResolving] = useState<Record<number, boolean>>({});
 
   const updateNode = (index: number, field: keyof ClusterNode, value: string) => {
     const updated = nodes.map((n, i) =>
       i === index ? { ...n, [field]: value } : n,
     );
     onChange(updated);
+  };
+
+  /** When vm_resource_id is pasted/changed, auto-fill hostname from the last segment */
+  const handleResourceIdChange = (index: number, value: string) => {
+    const updated = [...nodes];
+    updated[index] = { ...updated[index], vm_resource_id: value };
+
+    // Auto-extract VM name from resource ID
+    const match = value.match(/\/virtualMachines\/([^/]+)$/i);
+    if (match) {
+      updated[index].hostname = match[1];
+      updated[index].fqdn = match[1];
+    }
+    onChange(updated);
+  };
+
+  /** Resolve hostname + IP from Azure via the function app */
+  const resolveVm = async (index: number) => {
+    const resourceId = nodes[index].vm_resource_id;
+    if (!resourceId) {
+      showToast('Enter a VM Resource ID first', 'error');
+      return;
+    }
+    setResolving((prev) => ({ ...prev, [index]: true }));
+    try {
+      const result = await api.resolveVm(resourceId);
+      const updated = [...nodes];
+      updated[index] = {
+        ...updated[index],
+        hostname: result.hostname || updated[index].hostname,
+        ip_address: result.ip_address || updated[index].ip_address,
+        fqdn: result.hostname || updated[index].fqdn,
+      };
+      onChange(updated);
+      showToast(`Resolved: ${result.hostname} (${result.ip_address})`, 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Resolve failed: ${msg}`, 'error');
+    } finally {
+      setResolving((prev) => ({ ...prev, [index]: false }));
+    }
   };
 
   const addNode = () => {
@@ -39,13 +83,21 @@ export default function NodeEditor({ nodes, onChange }: Props) {
     <>
       <div className="node-editor">
         <div className="node-row node-header">
+          <span>VM Resource ID</span>
           <span>Hostname</span>
           <span>IP Address</span>
-          <span>VM Resource ID</span>
           <span />
         </div>
         {nodes.map((node, i) => (
           <div className="node-row" key={i}>
+            <input
+              type="text"
+              placeholder="/subscriptions/.../virtualMachines/vm-name"
+              value={node.vm_resource_id}
+              onChange={(e) => handleResourceIdChange(i, e.target.value)}
+              required
+              className="wide-input"
+            />
             <input
               type="text"
               placeholder={`node${i + 1}`}
@@ -60,14 +112,15 @@ export default function NodeEditor({ nodes, onChange }: Props) {
               onChange={(e) => updateNode(i, 'ip_address', e.target.value)}
               required
             />
-            <input
-              type="text"
-              placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.Compute/virtualMachines/vm-name"
-              value={node.vm_resource_id}
-              onChange={(e) => updateNode(i, 'vm_resource_id', e.target.value)}
-              required
-              className="wide-input"
-            />
+            <button
+              type="button"
+              className="btn-resolve"
+              onClick={() => resolveVm(i)}
+              disabled={resolving[i] || !node.vm_resource_id}
+              title="Resolve hostname &amp; IP from Azure"
+            >
+              {resolving[i] ? '...' : '↻'}
+            </button>
             <button
               type="button"
               className="btn-remove"

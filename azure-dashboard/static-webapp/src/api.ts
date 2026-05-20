@@ -87,3 +87,27 @@ export async function runCleanup(runId: string): Promise<void> {
 export function getReportUrl(runId: string): string {
   return `${API_BASE}/report/${runId}`;
 }
+
+// ── Resolve VM ──────────────────────────────────────────────────────────────
+
+export interface ResolveVmResult {
+  vm_name: string;
+  hostname: string;
+  ip_address: string;
+  resource_group: string;
+  subscription_id: string;
+  error?: string;
+}
+
+export async function resolveVm(vmResourceId: string): Promise<ResolveVmResult> {
+  const resp = await fetch(`${API_BASE}/resolve-vm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vm_resource_id: vmResourceId }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(data.error || `HTTP ${resp.status}`);
+  }
+  return data as ResolveVmResult;
+}

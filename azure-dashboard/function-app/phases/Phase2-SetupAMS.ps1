@@ -169,6 +169,7 @@ function Invoke-Phase2 {
     Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "AMS infrastructure ready (RG + VNet + Subnet + Monitor)" -DurationSeconds $duration
 }
 
-if ($Config) {
+# Execute only when script is run directly (not dot-sourced by orchestrator)
+if ($MyInvocation.InvocationName -ne '.' -and $Config) {
     Invoke-Phase2 -Config $Config
 }

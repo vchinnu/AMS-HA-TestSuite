@@ -72,8 +72,17 @@ function Invoke-Phase6 {
     foreach ($node in $nodes) {
         $hostname = $node['hostname']
         $vmResourceId = $node['vm_resource_id']
-        $vmName = if ($vmResourceId) { ($vmResourceId -split '/')[-1] } else { $node['vm_name'] }
-        $vmRg = $node['vm_resource_group']
+        $crossSub = $false
+
+        if ($vmResourceId -and $vmResourceId -match '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.Compute/virtualMachines/([^/]+)') {
+            $vmSubId = $Matches[1]
+            $vmRg    = $Matches[2]
+            $vmName  = $Matches[3]
+            $crossSub = ($vmSubId -ne $Config['subscription_id'])
+        } else {
+            $vmName = $node['vm_name'] ?? $node['hostname']
+            $vmRg   = $node['vm_resource_group'] ?? $Config['resource_group']
+        }
 
         Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Scraping $hostname ($vmName)..."
 
@@ -84,16 +93,22 @@ function Invoke-Phase6 {
         if ($execMethod -in @('vm_run_command', 'both')) {
             try {
                 Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Trying VM Run Command..."
-                if ($vmResourceId) {
-                    $result = Invoke-AzVMRunCommand -ResourceId $vmResourceId `
-                        -CommandId 'RunShellScript' `
-                        -ScriptString $scrapeScript `
-                        -ErrorAction Stop
-                } else {
+                # Switch context for cross-subscription VMs
+                $originalCtx = $null
+                if ($crossSub) {
+                    $originalCtx = Get-AzContext
+                    Set-AzContext -Subscription $vmSubId -ErrorAction Stop | Out-Null
+                    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Switched to VM subscription: $vmSubId"
+                }
+                try {
                     $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
                         -CommandId 'RunShellScript' `
                         -ScriptString $scrapeScript `
                         -ErrorAction Stop
+                } finally {
+                    if ($crossSub -and $originalCtx) {
+                        Set-AzContext -Subscription $originalCtx.Subscription.Id -ErrorAction SilentlyContinue | Out-Null
+                    }
                 }
 
                 $stdout = ($result.Value | Where-Object { $_.Code -eq 'ProvisioningState/succeeded' -or $_.Code -match 'stdout' }).Message
