@@ -10,8 +10,7 @@ const EMPTY_NODE: ClusterNode = {
   hostname: '',
   ip_address: '',
   fqdn: '',
-  vm_name: '',
-  vm_resource_group: '',
+  vm_resource_id: '',
 };
 
 export default function NodeEditor({ nodes, onChange }: Props) {
@@ -42,8 +41,7 @@ export default function NodeEditor({ nodes, onChange }: Props) {
         <div className="node-row node-header">
           <span>Hostname</span>
           <span>IP Address</span>
-          <span>VM Name</span>
-          <span>VM Resource Group</span>
+          <span>VM Resource ID</span>
           <span />
         </div>
         {nodes.map((node, i) => (
@@ -64,16 +62,11 @@ export default function NodeEditor({ nodes, onChange }: Props) {
             />
             <input
               type="text"
-              placeholder={`sap-node${i + 1}-vm`}
-              value={node.vm_name}
-              onChange={(e) => updateNode(i, 'vm_name', e.target.value)}
+              placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.Compute/virtualMachines/vm-name"
+              value={node.vm_resource_id}
+              onChange={(e) => updateNode(i, 'vm_resource_id', e.target.value)}
               required
-            />
-            <input
-              type="text"
-              placeholder="vm-resource-group"
-              value={node.vm_resource_group}
-              onChange={(e) => updateNode(i, 'vm_resource_group', e.target.value)}
+              className="wide-input"
             />
             <button
               type="button"

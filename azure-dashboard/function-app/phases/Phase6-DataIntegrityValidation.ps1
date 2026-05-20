@@ -71,7 +71,8 @@ function Invoke-Phase6 {
 
     foreach ($node in $nodes) {
         $hostname = $node['hostname']
-        $vmName = $node['vm_name']
+        $vmResourceId = $node['vm_resource_id']
+        $vmName = if ($vmResourceId) { ($vmResourceId -split '/')[-1] } else { $node['vm_name'] }
         $vmRg = $node['vm_resource_group']
 
         Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Scraping $hostname ($vmName)..."
@@ -83,10 +84,17 @@ function Invoke-Phase6 {
         if ($execMethod -in @('vm_run_command', 'both')) {
             try {
                 Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Trying VM Run Command..."
-                $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
-                    -CommandId 'RunShellScript' `
-                    -ScriptString $scrapeScript `
-                    -ErrorAction Stop
+                if ($vmResourceId) {
+                    $result = Invoke-AzVMRunCommand -ResourceId $vmResourceId `
+                        -CommandId 'RunShellScript' `
+                        -ScriptString $scrapeScript `
+                        -ErrorAction Stop
+                } else {
+                    $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
+                        -CommandId 'RunShellScript' `
+                        -ScriptString $scrapeScript `
+                        -ErrorAction Stop
+                }
 
                 $stdout = ($result.Value | Where-Object { $_.Code -eq 'ProvisioningState/succeeded' -or $_.Code -match 'stdout' }).Message
                 if (-not $stdout) {

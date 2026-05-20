@@ -217,15 +217,28 @@ function Invoke-VMCommand {
     )
 
     $vmName = $Node['vm_name']
+    $vmResourceId = $Node['vm_resource_id']
     $vmRg = if ($Node['vm_resource_group']) { $Node['vm_resource_group'] } else { $Config['resource_group'] }
     $method = $Config['execution_method']
+
+    # Determine if we use -ResourceId (cross-subscription) or -ResourceGroupName/-VMName
+    $useResourceId = [bool]$vmResourceId
+    if ($useResourceId) {
+        # Parse VM name from resource ID for logging
+        if ($vmResourceId -match '/virtualMachines/([^/]+)$') { $vmName = $Matches[1] }
+        Write-PhaseLog -Phase $Phase -Level 'INFO' -Message "  Using VM Resource ID (cross-subscription capable)"
+    }
 
     if ($method -eq 'vm_run_command' -or $method -eq 'both') {
         Write-PhaseLog -Phase $Phase -Level 'INFO' -Message "Executing via VM Run Command on $vmName..."
         
         # Check for existing managed run commands (informational only - do NOT delete them)
         try {
-            $existingCmds = Get-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName -ErrorAction SilentlyContinue
+            if ($useResourceId) {
+                $existingCmds = Get-AzVMRunCommand -ResourceGroupName ($vmResourceId -split '/')[4] -VMName $vmName -ErrorAction SilentlyContinue
+            } else {
+                $existingCmds = Get-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName -ErrorAction SilentlyContinue
+            }
             $activeCmds = $existingCmds | Where-Object { $_.ProvisioningState -in @('Creating', 'Updating', 'Deleting') }
             if ($activeCmds -and $activeCmds.Count -gt 0) {
                 $cmdNames = ($activeCmds | ForEach-Object { "$($_.Name)($($_.ProvisioningState))" }) -join ', '
@@ -240,9 +253,15 @@ function Invoke-VMCommand {
         $retryDelay = 45  # seconds (total wait: up to ~7.5 min)
         for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
             try {
-                $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
-                    -CommandId 'RunShellScript' -ScriptString $ScriptContent `
-                    -ErrorAction Stop
+                if ($useResourceId) {
+                    $result = Invoke-AzVMRunCommand -ResourceId $vmResourceId `
+                        -CommandId 'RunShellScript' -ScriptString $ScriptContent `
+                        -ErrorAction Stop
+                } else {
+                    $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
+                        -CommandId 'RunShellScript' -ScriptString $ScriptContent `
+                        -ErrorAction Stop
+                }
                 
                 # Extract output - handle BOTH Az.Compute SDK formats:
                 # Old: ComponentStatus/StdOut/succeeded + ComponentStatus/StdErr/succeeded
@@ -329,7 +348,11 @@ function Invoke-VMCommand {
             # Use az network bastion ssh
             $keyPath = $bastion['private_key_path']
             $username = $bastion['ssh_username']
-            $vmId = (Get-AzVM -ResourceGroupName $vmRg -Name $vmName).Id
+            if ($useResourceId) {
+                $vmId = $vmResourceId
+            } else {
+                $vmId = (Get-AzVM -ResourceGroupName $vmRg -Name $vmName).Id
+            }
 
             $output = az network bastion ssh --name $bastion['name'] `
                 --resource-group $bastionRg --target-resource-id $vmId `

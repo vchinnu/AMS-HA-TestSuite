@@ -161,16 +161,32 @@ function New-TestReport {
         foreach ($node in $Config['nodes']) {
             $hn = $node['hostname']
             $ip = $node['ip_address']
-            $vm = $node['vm_name']
             $nodesHtml += "                        <li><span class=`"node-name`">$hn</span><span>$ip</span></li>`n"
         }
     }
     $vmListHtml = ""
     if ($Config['nodes']) {
         foreach ($node in $Config['nodes']) {
-            $vm = $node['vm_name']
+            $vmResId = $node['vm_resource_id']
+            if ($vmResId -and $vmResId -match '/virtualMachines/([^/]+)$') {
+                $vm = $Matches[1]
+            } else {
+                $vm = $node['vm_name'] ?? $node['hostname']
+            }
             $vmListHtml += "                        <li><span class=`"node-name`">$vm</span></li>`n"
         }
+    }
+    # Parse VM subscription & RG from first node's resource ID
+    $vmRg = '-'
+    $vmSubId = ''
+    if ($Config['nodes'] -and $Config['nodes'][0]['vm_resource_id']) {
+        $firstVmId = $Config['nodes'][0]['vm_resource_id']
+        if ($firstVmId -match '/subscriptions/([^/]+)/resourceGroups/([^/]+)/') {
+            $vmSubId = $Matches[1]
+            $vmRg = $Matches[2]
+        }
+    } elseif ($Config['nodes'] -and $Config['nodes'][0]['vm_resource_group']) {
+        $vmRg = $Config['nodes'][0]['vm_resource_group']
     }
     $vnetName = if ($Config['vnet']) { $Config['vnet']['name'] } else { '-' }
     $vnetRg = if ($Config['vnet']) { $Config['vnet']['resource_group'] } else { '-' }
@@ -182,7 +198,6 @@ function New-TestReport {
     $subId = $Config['subscription_id'] ?? '-'
     $subIdShort = if ($subId.Length -gt 13) { "$($subId.Substring(0,8))...$($subId.Substring($subId.Length-4))" } else { $subId }
     $laIdShort = if ($laWsId.Length -gt 13) { "$($laWsId.Substring(0,8))...$($laWsId.Substring($laWsId.Length-4))" } else { $laWsId }
-    $vmRg = if ($Config['nodes'] -and $Config['nodes'][0]['vm_resource_group']) { $Config['nodes'][0]['vm_resource_group'] } else { '-' }
 
     $inputsPanelHtml = @"
         <div class="inputs-panel">
@@ -218,6 +233,7 @@ $nodesHtml                    </ul>
                     <ul class="node-list">
 $vmListHtml                    </ul>
                     <div class="input-row"><span class="key">VM RG</span><span class="val">$vmRg</span></div>
+                    $(if ($vmSubId -and $vmSubId -ne $subId) { "<div class=`"input-row`"><span class=`"key`">VM Subscription</span><span class=`"val`">$vmSubId</span></div>" })
                 </div>
             </div>
         </div>

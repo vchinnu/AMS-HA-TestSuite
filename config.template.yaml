@@ -18,17 +18,21 @@ cluster_name: "hacluster"              # Pacemaker cluster name
 
 # --- Cluster Nodes ---
 # [REQUIRED] At least 2 nodes. Add more entries for larger clusters.
+# Use vm_resource_id for cross-subscription scenarios (preferred).
+# If vm_resource_id is set, vm_name and vm_resource_group are ignored for execution.
 nodes:
   - hostname: "node1"
     ip_address: "10.0.1.5"
     fqdn: "node1.sap.contoso.com"
     vm_name: "sap-node1-vm"            # Azure VM name (for Run Command)
     vm_resource_group: ""              # VM's resource group (if different from above)
+    vm_resource_id: ""                 # Full ARM resource ID (cross-sub): /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/virtualMachines/{vm}
   - hostname: "node2"
     ip_address: "10.0.1.6"
     fqdn: "node2.sap.contoso.com"
     vm_name: "sap-node2-vm"
     vm_resource_group: ""
+    vm_resource_id: ""
 
 # --- VNet & Subnet for AMS ---
 vnet:

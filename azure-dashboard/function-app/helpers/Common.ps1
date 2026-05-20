@@ -216,7 +216,8 @@ function Invoke-VMCommand {
         [string]$Phase
     )
 
-    $vmName = $Node['vm_name']
+    $vmResourceId = $Node['vm_resource_id']
+    $vmName = if ($vmResourceId) { ($vmResourceId -split '/')[-1] } else { $Node['vm_name'] }
     $vmRg = if ($Node['vm_resource_group']) { $Node['vm_resource_group'] } else { $Config['resource_group'] }
     $method = $Config['execution_method']
 
@@ -225,7 +226,11 @@ function Invoke-VMCommand {
         
         # Check for existing managed run commands (informational only - do NOT delete them)
         try {
-            $existingCmds = Get-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName -ErrorAction SilentlyContinue
+            if ($vmResourceId) {
+                $existingCmds = Get-AzVMRunCommand -ResourceId "$vmResourceId/runCommands" -ErrorAction SilentlyContinue
+            } else {
+                $existingCmds = Get-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName -ErrorAction SilentlyContinue
+            }
             $activeCmds = $existingCmds | Where-Object { $_.ProvisioningState -in @('Creating', 'Updating', 'Deleting') }
             if ($activeCmds -and $activeCmds.Count -gt 0) {
                 $cmdNames = ($activeCmds | ForEach-Object { "$($_.Name)($($_.ProvisioningState))" }) -join ', '
@@ -240,9 +245,15 @@ function Invoke-VMCommand {
         $retryDelay = 45  # seconds (total wait: up to ~7.5 min)
         for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
             try {
-                $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
-                    -CommandId 'RunShellScript' -ScriptString $ScriptContent `
-                    -ErrorAction Stop
+                if ($vmResourceId) {
+                    $result = Invoke-AzVMRunCommand -ResourceId $vmResourceId `
+                        -CommandId 'RunShellScript' -ScriptString $ScriptContent `
+                        -ErrorAction Stop
+                } else {
+                    $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
+                        -CommandId 'RunShellScript' -ScriptString $ScriptContent `
+                        -ErrorAction Stop
+                }
                 
                 # Extract output - handle BOTH Az.Compute SDK formats:
                 # Old: ComponentStatus/StdOut/succeeded + ComponentStatus/StdErr/succeeded

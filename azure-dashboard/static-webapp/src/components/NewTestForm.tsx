@@ -7,8 +7,8 @@ import type { TestConfig, ClusterNode } from '../types';
 // ── Empty / Sample configs ──────────────────────────────────────────────────
 
 const EMPTY_NODES: ClusterNode[] = [
-  { hostname: '', ip_address: '', fqdn: '', vm_name: '', vm_resource_group: '' },
-  { hostname: '', ip_address: '', fqdn: '', vm_name: '', vm_resource_group: '' },
+  { hostname: '', ip_address: '', fqdn: '', vm_resource_id: '' },
+  { hostname: '', ip_address: '', fqdn: '', vm_resource_id: '' },
 ];
 
 const SAMPLE: Partial<TestConfig> & { nodes: ClusterNode[] } = {
@@ -29,8 +29,8 @@ const SAMPLE: Partial<TestConfig> & { nodes: ClusterNode[] } = {
   vnet: { name: 'CONTOSO-VNET-NE', resource_group: 'ContosoVNETRG' },
   subnet: { name: 'padm-ha-test-subnet', cidr: '/28' },
   nodes: [
-    { hostname: 'chascs01l0c2', ip_address: '10.8.1.41', fqdn: 'chascs01l0c2', vm_name: 'LAB-NOEU-SAP01-CHA_chascs01l0c2', vm_resource_group: 'lab-noeu-sap01-cha' },
-    { hostname: 'chascs02l0c2', ip_address: '10.8.1.39', fqdn: 'chascs02l0c2', vm_name: 'LAB-NOEU-SAP01-CHA_chascs02l0c2', vm_resource_group: 'lab-noeu-sap01-cha' },
+    { hostname: 'chascs01l0c2', ip_address: '10.8.1.41', fqdn: 'chascs01l0c2', vm_resource_id: '/subscriptions/2b331373-3d36-4585-bdb9-d3364786e775/resourceGroups/lab-noeu-sap01-cha/providers/Microsoft.Compute/virtualMachines/LAB-NOEU-SAP01-CHA_chascs01l0c2' },
+    { hostname: 'chascs02l0c2', ip_address: '10.8.1.39', fqdn: 'chascs02l0c2', vm_resource_id: '/subscriptions/2b331373-3d36-4585-bdb9-d3364786e775/resourceGroups/lab-noeu-sap01-cha/providers/Microsoft.Compute/virtualMachines/LAB-NOEU-SAP01-CHA_chascs02l0c2' },
   ],
 };
 
@@ -60,33 +60,45 @@ function parseVnetResourceId(id: string) {
 
 // ── Component ───────────────────────────────────────────────────────────────
 
+const FORM_STORAGE_KEY = 'ha-test-form-state';
+
+function loadSavedForm() {
+  try {
+    const raw = sessionStorage.getItem(FORM_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
 export default function NewTestForm() {
   const { showToast, setActiveTab, setCurrentRunId } = useApp();
 
+  // Restore form state from sessionStorage (survives tab switches)
+  const saved = loadSavedForm();
+
   // Form state
-  const [sapSid, setSapSid] = useState('');
-  const [clusterName, setClusterName] = useState('');
-  const [osType, setOsType] = useState<'SUSE' | 'RHEL'>('SUSE');
-  const [osVersion, setOsVersion] = useState('');
-  const [rgResourceId, setRgResourceId] = useState('');
-  const [subscriptionId, setSubscriptionId] = useState('');
-  const [resourceGroup, setResourceGroup] = useState('');
-  const [location, setLocation] = useState('');
-  const [amsMonitorName, setAmsMonitorName] = useState('');
-  const [reportStorageAccount, setReportStorageAccount] = useState('');
-  const [reportStorageRg, setReportStorageRg] = useState('');
-  const [clusterVnetResourceId, setClusterVnetResourceId] = useState('');
-  const [clusterVnetName, setClusterVnetName] = useState('');
-  const [clusterVnetRg, setClusterVnetRg] = useState('');
-  const [amsSameVnet, setAmsSameVnet] = useState(true);
-  const [amsVnetResourceId, setAmsVnetResourceId] = useState('');
-  const [amsVnetName, setAmsVnetName] = useState('');
-  const [amsVnetRg, setAmsVnetRg] = useState('');
-  const [subnetName, setSubnetName] = useState('');
-  const [subnetCidr, setSubnetCidr] = useState('/28');
-  const [executionMethod, setExecutionMethod] = useState<'vm_run_command' | 'bastion' | 'both'>('vm_run_command');
-  const [pollInterval, setPollInterval] = useState(120);
-  const [nodes, setNodes] = useState<ClusterNode[]>(() => EMPTY_NODES.map((n) => ({ ...n })));
+  const [sapSid, setSapSid] = useState(saved?.sapSid ?? '');
+  const [clusterName, setClusterName] = useState(saved?.clusterName ?? '');
+  const [osType, setOsType] = useState<'SUSE' | 'RHEL'>(saved?.osType ?? 'SUSE');
+  const [osVersion, setOsVersion] = useState(saved?.osVersion ?? '');
+  const [rgResourceId, setRgResourceId] = useState(saved?.rgResourceId ?? '');
+  const [subscriptionId, setSubscriptionId] = useState(saved?.subscriptionId ?? '');
+  const [resourceGroup, setResourceGroup] = useState(saved?.resourceGroup ?? '');
+  const [location, setLocation] = useState(saved?.location ?? '');
+  const [amsMonitorName, setAmsMonitorName] = useState(saved?.amsMonitorName ?? '');
+  const [reportStorageAccount, setReportStorageAccount] = useState(saved?.reportStorageAccount ?? '');
+  const [reportStorageRg, setReportStorageRg] = useState(saved?.reportStorageRg ?? '');
+  const [clusterVnetResourceId, setClusterVnetResourceId] = useState(saved?.clusterVnetResourceId ?? '');
+  const [clusterVnetName, setClusterVnetName] = useState(saved?.clusterVnetName ?? '');
+  const [clusterVnetRg, setClusterVnetRg] = useState(saved?.clusterVnetRg ?? '');
+  const [amsSameVnet, setAmsSameVnet] = useState(saved?.amsSameVnet ?? true);
+  const [amsVnetResourceId, setAmsVnetResourceId] = useState(saved?.amsVnetResourceId ?? '');
+  const [amsVnetName, setAmsVnetName] = useState(saved?.amsVnetName ?? '');
+  const [amsVnetRg, setAmsVnetRg] = useState(saved?.amsVnetRg ?? '');
+  const [subnetName, setSubnetName] = useState(saved?.subnetName ?? '');
+  const [subnetCidr, setSubnetCidr] = useState(saved?.subnetCidr ?? '/28');
+  const [executionMethod, setExecutionMethod] = useState<'vm_run_command' | 'bastion' | 'both'>(saved?.executionMethod ?? 'vm_run_command');
+  const [pollInterval, setPollInterval] = useState(saved?.pollInterval ?? 120);
+  const [nodes, setNodes] = useState<ClusterNode[]>(() => saved?.nodes ?? EMPTY_NODES.map((n) => ({ ...n })));
   const [submitting, setSubmitting] = useState(false);
 
   // ── Auto-parse resource IDs ───────────────────────────────────────────────
@@ -142,6 +154,19 @@ export default function NewTestForm() {
     setNodes(SAMPLE.nodes.map((n) => ({ ...n })));
     setReportStorageAccount('');
     setReportStorageRg('');
+    // Persist sample to sessionStorage
+    sessionStorage.setItem(FORM_STORAGE_KEY, JSON.stringify({
+      sapSid: SAMPLE.sap_sid, clusterName: SAMPLE.cluster_name, osType: SAMPLE.os_type,
+      osVersion: SAMPLE.os_version, rgResourceId: SAMPLE.rg_resource_id,
+      subscriptionId: SAMPLE.subscription_id, resourceGroup: SAMPLE.resource_group,
+      location: SAMPLE.location, amsMonitorName: SAMPLE.ams_monitor_name,
+      reportStorageAccount: '', reportStorageRg: '',
+      clusterVnetResourceId: SAMPLE.vnet_resource_id,
+      clusterVnetName: SAMPLE.cluster_vnet!.name, clusterVnetRg: SAMPLE.cluster_vnet!.resource_group,
+      amsSameVnet: true, amsVnetResourceId: '', amsVnetName: '', amsVnetRg: '',
+      subnetName: SAMPLE.subnet!.name, subnetCidr: SAMPLE.subnet!.cidr,
+      executionMethod: 'vm_run_command', pollInterval: 120, nodes: SAMPLE.nodes,
+    }));
     showToast('Sample config loaded', 'success');
   };
 
@@ -156,6 +181,7 @@ export default function NewTestForm() {
     setSubnetName(''); setSubnetCidr('/28'); setExecutionMethod('vm_run_command');
     setPollInterval(120);
     setNodes(EMPTY_NODES.map((n) => ({ ...n })));
+    sessionStorage.removeItem(FORM_STORAGE_KEY);
     showToast('Form cleared', 'success');
   };
 
@@ -196,6 +222,14 @@ export default function NewTestForm() {
     };
 
     setSubmitting(true);
+    // Persist form state so it survives tab switch / re-mount
+    sessionStorage.setItem(FORM_STORAGE_KEY, JSON.stringify({
+      sapSid, clusterName, osType, osVersion, rgResourceId, subscriptionId,
+      resourceGroup, location, amsMonitorName, reportStorageAccount, reportStorageRg,
+      clusterVnetResourceId, clusterVnetName, clusterVnetRg, amsSameVnet,
+      amsVnetResourceId, amsVnetName, amsVnetRg, subnetName, subnetCidr,
+      executionMethod, pollInterval, nodes: validNodes,
+    }));
     try {
       const result = await api.startTest(config);
       if (result.runId) {

@@ -168,7 +168,10 @@ function New-TestReport {
     $vmListHtml = ""
     if ($Config['nodes']) {
         foreach ($node in $Config['nodes']) {
-            $vm = $node['vm_name']
+            $vm = if ($node['vm_resource_id']) {
+                # Parse VM name from resource ID
+                if ($node['vm_resource_id'] -match '/virtualMachines/([^/]+)$') { $Matches[1] } else { $node['vm_resource_id'] }
+            } else { $node['vm_name'] }
             $vmListHtml += "                        <li><span class=`"node-name`">$vm</span></li>`n"
         }
     }
@@ -182,7 +185,20 @@ function New-TestReport {
     $subId = $Config['subscription_id'] ?? '-'
     $subIdShort = if ($subId.Length -gt 13) { "$($subId.Substring(0,8))...$($subId.Substring($subId.Length-4))" } else { $subId }
     $laIdShort = if ($laWsId.Length -gt 13) { "$($laWsId.Substring(0,8))...$($laWsId.Substring($laWsId.Length-4))" } else { $laWsId }
-    $vmRg = if ($Config['nodes'] -and $Config['nodes'][0]['vm_resource_group']) { $Config['nodes'][0]['vm_resource_group'] } else { '-' }
+    # Derive VM RG and VM subscription from resource ID or fallback to explicit fields
+    $vmRg = '-'
+    $vmSubId = '-'
+    if ($Config['nodes'] -and $Config['nodes'][0]) {
+        $firstNode = $Config['nodes'][0]
+        if ($firstNode['vm_resource_id'] -match '/subscriptions/([^/]+)/resourceGroups/([^/]+)/') {
+            $vmSubId = $Matches[1]
+            $vmRg = $Matches[2]
+        } else {
+            $vmRg = if ($firstNode['vm_resource_group']) { $firstNode['vm_resource_group'] } else { '-' }
+            $vmSubId = $subId
+        }
+    }
+    $vmSubIdShort = if ($vmSubId.Length -gt 13) { "$($vmSubId.Substring(0,8))...$($vmSubId.Substring($vmSubId.Length-4))" } else { $vmSubId }
 
     $inputsPanelHtml = @"
         <div class="inputs-panel">
@@ -218,6 +234,7 @@ $nodesHtml                    </ul>
                     <ul class="node-list">
 $vmListHtml                    </ul>
                     <div class="input-row"><span class="key">VM RG</span><span class="val">$vmRg</span></div>
+                    <div class="input-row"><span class="key">VM Subscription</span><span class="val">$vmSubIdShort</span></div>
                 </div>
             </div>
         </div>

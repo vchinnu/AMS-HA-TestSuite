@@ -7,8 +7,7 @@ export interface ClusterNode {
   hostname: string;
   ip_address: string;
   fqdn: string;
-  vm_name: string;
-  vm_resource_group: string;
+  vm_resource_id: string;
 }
 
 /** VNet reference (name + resource group). */
