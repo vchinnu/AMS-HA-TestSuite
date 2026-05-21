@@ -120,6 +120,7 @@ $config = @{
     cluster_name                 = $body.cluster_name
     nodes                        = $body.nodes
     vnet                         = $body.vnet ?? @{ name = ''; resource_group = '' }
+    vnet_resource_id             = $body.vnet_resource_id ?? ''
     subnet                       = $body.subnet ?? @{ name = ''; cidr = '' }
     cluster_vnet                 = $body.cluster_vnet ?? @{ name = ''; resource_group = '' }
     ams_monitor_name             = $body.ams_monitor_name ?? "AMS-HA-Test-$($body.sap_sid)"

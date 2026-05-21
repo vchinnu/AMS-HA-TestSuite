@@ -257,8 +257,11 @@ function Invoke-VMCommand {
                 Set-AzContext -Subscription $vmSubId -ErrorAction Stop | Out-Null
                 Write-PhaseLog -Phase $Phase -Level 'INFO' -Message "Switched context to VM subscription: $vmSubId"
             } catch {
-                Write-PhaseLog -Phase $Phase -Level 'ERROR' -Message "Failed to switch to VM subscription $vmSubId`: $_"
-                return @{ Success = $false; Output = ''; Error = "Cannot switch to VM subscription: $_"; Method = 'vm_run_command' }
+                $funcAppId = $originalContext.Account.Id ?? '(unknown)'
+                $errDetail = $_.Exception.Message
+                Write-PhaseLog -Phase $Phase -Level 'ERROR' -Message "Failed to switch to VM subscription '$vmSubId': $errDetail"
+                Write-PhaseLog -Phase $Phase -Level 'ERROR' -Message "RESOLUTION: The Function App managed identity ($funcAppId) does not have access to subscription '$vmSubId'. Grant it 'Virtual Machine Contributor' (or 'Contributor') role on the VM subscription. In Azure Portal: VM Subscription > Access control (IAM) > Add role assignment > Assign to the Function App's managed identity."
+                return @{ Success = $false; Output = ''; Error = "Cannot switch to VM subscription '$vmSubId'. Grant the Function App managed identity access to that subscription. See log for details."; Method = 'vm_run_command' }
             }
         }
 

@@ -43,6 +43,29 @@ function Invoke-Phase2 {
     # --- Step 2: VNet ---
     $vnetRg = if ($vnetConfig['resource_group']) { $vnetConfig['resource_group'] } else { $rgName }
     $vnetName = $vnetConfig['name']
+    $vnetResourceId = $Config['vnet_resource_id']
+    $vnetCrossSub = $false
+    $vnetOriginalCtx = $null
+
+    # If vnet_resource_id is provided, parse subscription to handle cross-sub VNets
+    if ($vnetResourceId -and $vnetResourceId -match '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.Network/virtualNetworks/([^/]+)') {
+        $vnetSubId = $Matches[1]
+        $vnetRg    = $Matches[2]
+        $vnetName  = $Matches[3]
+        $vnetCrossSub = ($vnetSubId -ne $subscriptionId)
+        if ($vnetCrossSub) {
+            Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "VNet is in different subscription '$vnetSubId'. Switching context..."
+            try {
+                $vnetOriginalCtx = Get-AzContext
+                Set-AzContext -Subscription $vnetSubId -ErrorAction Stop | Out-Null
+            } catch {
+                Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Failed to switch to VNet subscription '$vnetSubId': $($_.Exception.Message)"
+                Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "RESOLUTION: Grant the Function App managed identity 'Network Contributor' role on subscription '$vnetSubId' or resource group '$vnetRg'."
+                Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message "Cannot access VNet subscription. Grant managed identity access." -DurationSeconds ([int](New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds)
+                return
+            }
+        }
+    }
 
     $vnet = $null
     $vnetError = $null
@@ -64,6 +87,13 @@ function Invoke-Phase2 {
         # Log current subscription context for diagnostics
         $ctx = Get-AzContext
         Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Current context: Sub=$($ctx.Subscription.Id) ($($ctx.Subscription.Name)), Account=$($ctx.Account.Id)"
+        if ($vnetCrossSub) {
+            Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "RESOLUTION: The VNet is in a different subscription. Grant the Function App managed identity 'Network Contributor' on RG '$vnetRg' in subscription '$vnetSubId'."
+        }
+        # Restore context before returning
+        if ($vnetCrossSub -and $vnetOriginalCtx) {
+            Set-AzContext -Subscription $vnetOriginalCtx.Subscription.Id -ErrorAction SilentlyContinue | Out-Null
+        }
         Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message "VNet not found: $detail" -DurationSeconds ([int](New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds)
         return
     } else {
@@ -96,6 +126,12 @@ function Invoke-Phase2 {
     $vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $vnetRg
     $subnet = $vnet.Subnets | Where-Object { $_.Name -eq $subnetName }
     $subnetId = $subnet.Id
+
+    # Restore original subscription context if we switched for cross-sub VNet
+    if ($vnetCrossSub -and $vnetOriginalCtx) {
+        Set-AzContext -Subscription $vnetOriginalCtx.Subscription.Id -ErrorAction SilentlyContinue | Out-Null
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Restored context to AMS subscription: $subscriptionId"
+    }
 
     # --- Step 4: Connectivity check + VNet peering ---
     $isConnected = Test-SubnetConnectivity -Config $Config -Phase $PhaseName
