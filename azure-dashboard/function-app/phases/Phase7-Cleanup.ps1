@@ -90,35 +90,17 @@ function Invoke-Phase7 {
         }
     }
 
-    # --- Step 4: Remove subnet ---
-    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Removing AMS subnet..."
-    try {
-        $vnetRg = if ($Config['vnet']['resource_group']) { $Config['vnet']['resource_group'] } else { $rgName }
-        $vnet = Get-AzVirtualNetwork -Name $Config['vnet']['name'] -ResourceGroupName $vnetRg -ErrorAction SilentlyContinue
-        if ($vnet) {
-            $subnet = $vnet.Subnets | Where-Object { $_.Name -eq $Config['subnet']['name'] }
-            if ($subnet) {
-                Remove-AzVirtualNetworkSubnetConfig -Name $Config['subnet']['name'] -VirtualNetwork $vnet | Out-Null
-                $vnet | Set-AzVirtualNetwork | Out-Null
-                Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Subnet removed: $($Config['subnet']['name'])"
-            }
-        }
-    }
-    catch {
-        Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "Error removing subnet: $_"
-    }
+    # --- Step 4: Subnet ---
+    # SAFETY: Never delete the subnet automatically.
+    # Subnet deletion is a manual operator action only — it may be a pre-existing
+    # subnet shared with other services.
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Subnet '$($Config['subnet']['name'])' preserved (subnet deletion disabled — manual action only)"
 
-    # --- Step 5: Resource group (only if it was created by us and user confirms) ---
-    if (-not $autoConfirm) {
-        $deleteRg = Request-UserConsent -Action "DELETE entire resource group '$rgName'? (This removes ALL resources in it)" -Phase $PhaseName
-        if ($deleteRg) {
-            Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Deleting resource group: $rgName"
-            Remove-AzResourceGroup -Name $rgName -Force | Out-Null
-            Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Resource group deleted: $rgName"
-        } else {
-            Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Resource group preserved: $rgName"
-        }
-    }
+    # --- Step 5: Resource group ---
+    # SAFETY: Never delete the resource group automatically.
+    # RG deletion is a manual operator action only — it may contain resources
+    # not created by this test (as discovered on 2026-06-03 incident).
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Resource group '$rgName' preserved (RG deletion disabled — manual action only)"
 
     $duration = [int](New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds
     Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "Cleanup completed" -DurationSeconds $duration

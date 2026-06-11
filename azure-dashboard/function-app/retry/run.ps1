@@ -320,21 +320,28 @@ try {
     Write-Warning "Final status update failed: $_"
 }
 
-# If all 6 passed, regenerate report
-if ($finalStatus -eq 'Passed') {
-    try {
-        . (Join-Path $helpersDir 'HtmlReportGenerator.ps1')
-        $reportHtml = New-TestReport -Config $config -PhaseResults $phaseResults
-        $blobName = "reports/$runId/HACluster_TestReport.html"
-        Set-AzStorageBlobContent -Container 'ha-test-reports' -Blob $blobName -BlobType Block `
-            -Context $storageCtx -Content ([System.Text.Encoding]::UTF8.GetBytes($reportHtml)) -Force | Out-Null
-        
-        $sasToken = New-AzStorageBlobSASToken -Container 'ha-test-reports' -Blob $blobName `
-            -Permission 'r' -ExpiryTime (Get-Date).AddDays(365) -Context $storageCtx
-        $entity = Get-AzTableRow -Table $table -PartitionKey $partitionKey -RowKey $runId
-        $entity.ReportUrl = "$($storageCtx.BlobEndPoint)ha-test-reports/$blobName$sasToken"
-        $entity | Update-AzTableRow -Table $table | Out-Null
-    } catch {
-        Write-Warning "Report generation failed: $_"
-    }
+# Regenerate report with final results
+try {
+    . (Join-Path $helpersDir 'HtmlReportGenerator.ps1')
+    $logEntries = Get-LogEntries
+    $reportDir = $env:TEMP
+    $reportFile = New-TestReport -PhaseResults $phaseResults -LogEntries $logEntries `
+        -Config $config -OutputPath $reportDir
+
+    # Upload report to Blob Storage
+    $container = Get-AzStorageContainer -Name 'ha-test-reports' -Context $storageCtx -ErrorAction SilentlyContinue
+    if (-not $container) { New-AzStorageContainer -Name 'ha-test-reports' -Context $storageCtx -Permission Off | Out-Null }
+
+    $blobName = Split-Path $reportFile -Leaf
+    Set-AzStorageBlobContent -File $reportFile -Container 'ha-test-reports' -Blob $blobName -Context $storageCtx -Force | Out-Null
+
+    # Update entity with new report blob name
+    $entity = Get-AzTableRow -Table $table -PartitionKey $partitionKey -RowKey $runId
+    $entity.ReportUrl = "proxy:$blobName"
+    $entity.ReportBlobName = $blobName
+    $entity = Sanitize-Entity -Entity $entity
+    $entity | Update-AzTableRow -Table $table | Out-Null
+    Write-DashboardLog -Message "Report regenerated: $blobName" -Phase 6
+} catch {
+    Write-Warning "Report regeneration failed: $_"
 }

@@ -49,7 +49,15 @@ function Invoke-Phase3 {
 
     foreach ($node in $nodes) {
         $hostname = $node['hostname']
-        $ipAddress = $node['ip_address']
+        $ipAddress = if ($node['ip_address']) { $node['ip_address'].Trim() } else { '' }
+
+        # Validate IP address is present
+        if (-not $ipAddress -or $ipAddress -eq '') {
+            Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Node '$hostname' has no IP address configured. Please resolve the VM IP from the resource ID before starting the test."
+            $allSuccess = $false
+            continue
+        }
+
         # Provider name: "HA-<SID>-<full_hostname>" — use full hostname to ensure uniqueness
         $providerName = "HA-$sid-$hostname"
         $prometheusUrl = Get-PrometheusUrl -IpAddress $ipAddress -OsType $osType
@@ -110,7 +118,20 @@ function Invoke-Phase3 {
 
             if ($failed -gt 0) {
                 foreach ($fp in ($haProviders | Where-Object { $_.ProvisioningState -eq 'Failed' })) {
-                    Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Provider FAILED: $($fp.Name)"
+                    # Extract detailed error from the provider object
+                    $errorDetail = ''
+                    try {
+                        $detail = Get-AzWorkloadsProviderInstance -ResourceGroupName $rgName -MonitorName $monitorName -Name $fp.Name -ErrorAction SilentlyContinue
+                        if ($detail.ProvisioningError) {
+                            $errorDetail = $detail.ProvisioningError
+                        } elseif ($detail.Error) {
+                            $errorDetail = $detail.Error | ConvertTo-Json -Depth 2 -Compress
+                        } elseif ($detail.Property.Error) {
+                            $errorDetail = $detail.Property.Error | ConvertTo-Json -Depth 2 -Compress
+                        }
+                    } catch { }
+                    if (-not $errorDetail) { $errorDetail = 'No additional error details available from Azure' }
+                    Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Provider FAILED: $($fp.Name) — $errorDetail"
                 }
                 $allSuccess = $false
                 break
@@ -132,7 +153,11 @@ function Invoke-Phase3 {
     if ($allSuccess) {
         Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "All $createdCount providers created and provisioned" -DurationSeconds $duration
     } else {
-        Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message "Provider creation/provisioning had failures" -DurationSeconds $duration
+        # Collect failure summary from logs
+        $failedLogs = Get-LogEntries | Where-Object { $_.Phase -eq $PhaseName -and $_.Level -eq 'ERROR' } | Select-Object -Last 3
+        $failSummary = ($failedLogs | ForEach-Object { $_.Message }) -join '; '
+        if (-not $failSummary) { $failSummary = 'Provider creation/provisioning had failures' }
+        Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message $failSummary -DurationSeconds $duration
     }
 }
 

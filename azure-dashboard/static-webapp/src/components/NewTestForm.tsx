@@ -194,6 +194,10 @@ export default function NewTestForm() {
       showToast('Add at least 2 cluster nodes', 'error');
       return;
     }
+    if (!subscriptionId.trim() || !resourceGroup.trim() || !location.trim() || !sapSid.trim() || !clusterName.trim()) {
+      showToast('Please fill in all required fields (Subscription, Resource Group, Location, SID, Cluster Name)', 'error');
+      return;
+    }
 
     const config: TestConfig = {
       subscription_id: subscriptionId,
@@ -212,7 +216,7 @@ export default function NewTestForm() {
         name: amsSameVnet ? clusterVnetName : amsVnetName,
         resource_group: amsSameVnet ? clusterVnetRg : amsVnetRg,
       },
-      subnet: { name: subnetName, cidr: subnetCidr },
+      subnet: { name: subnetName || 'ams-ha-test-subnet', cidr: subnetCidr },
       log_analytics_workspace_id: '',
       log_analytics_workspace_name: '',
       report_storage: { storage_account: reportStorageAccount, resource_group: reportStorageRg },

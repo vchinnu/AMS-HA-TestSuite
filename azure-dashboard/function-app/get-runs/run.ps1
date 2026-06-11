@@ -22,10 +22,10 @@ $response = $runs | Sort-Object { $_.StartTime } -Descending | ForEach-Object {
     # Use Status (updated by phase loop) over OverallStatus (only updated at end)
     $effectiveStatus = $_.Status ?? $_.OverallStatus ?? 'Unknown'
 
-    # Auto-mark stale "Running" entries (>120 min old) as Abandoned
+    # Auto-mark stale "Running" entries (>15 min old) as Abandoned
     if ($effectiveStatus -eq 'Running' -and $_.StartTime) {
         $age = (Get-Date) - [datetime]$_.StartTime
-        if ($age.TotalMinutes -gt 120) {
+        if ($age.TotalMinutes -gt 15) {
             $effectiveStatus = 'Abandoned'
             try {
                 $_.Status = 'Abandoned'

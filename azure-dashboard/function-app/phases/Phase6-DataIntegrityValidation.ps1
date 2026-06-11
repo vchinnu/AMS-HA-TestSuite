@@ -66,8 +66,20 @@ function Invoke-Phase6 {
 
     Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Execution method: $execMethod"
 
-    # Shell command to scrape exporter (same for both methods)
-    $scrapeScript = 'curl -s http://localhost:9664/metrics | grep "^ha_cluster_pacemaker_nodes" | grep " 1$"; curl -s http://localhost:9664/metrics | grep "^ha_cluster_pacemaker_resources" | grep "status=\"active\""'
+    # Shell command to scrape exporter (OS-specific port and URL)
+    if ($Config['os_type'] -eq 'SUSE') {
+        $scrapePort = 9664
+        $scrapeUrl = "http://localhost:$scrapePort/metrics"
+        # SUSE: status is a label; get nodes + active resources + location constraints (~25 lines, well within 4KB)
+        $scrapeScript = "curl -s '$scrapeUrl' 2>/dev/null | grep -E '^ha_cluster_pacemaker_nodes|^ha_cluster_pacemaker_resources\{.*status=.active|^ha_cluster_pacemaker_location_constraints'"
+    } else {
+        # RHEL uses PCP/pmproxy on port 44322
+        $scrapePort = 44322
+        $scrapeUrl = "http://localhost:${scrapePort}/metrics?names=ha_cluster"
+        # RHEL/PCP: status is in metric name suffix; get ALL node statuses + active resources + location constraints
+        $scrapeScript = "curl -s '$scrapeUrl' 2>/dev/null | grep -e '^ha_cluster_pacemaker_nodes_status_' -e '^ha_cluster_pacemaker_resources_status_active' -e '^ha_cluster_pacemaker_location_constraints'"
+    }
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Scrape URL: $scrapeUrl (OS: $($Config['os_type']))"
 
     foreach ($node in $nodes) {
         $hostname = $node['hostname']
@@ -89,28 +101,65 @@ function Invoke-Phase6 {
         $scrapeOutput = $null
         $scrapeSuccess = $false
 
-        # --- Method 1: VM Run Command ---
+        # --- Method 1: VM Run Command (with retry + timeout) ---
         if ($execMethod -in @('vm_run_command', 'both')) {
-            try {
-                Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Trying VM Run Command..."
-                # Switch context for cross-subscription VMs
-                $originalCtx = $null
-                if ($crossSub) {
-                    $originalCtx = Get-AzContext
-                    Set-AzContext -Subscription $vmSubId -ErrorAction Stop | Out-Null
-                    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Switched to VM subscription: $vmSubId"
-                }
+            $maxAttempts = 3
+            $retryDelaySec = 60
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
                 try {
-                    $result = Invoke-AzVMRunCommand -ResourceGroupName $vmRg -VMName $vmName `
-                        -CommandId 'RunShellScript' `
-                        -ScriptString $scrapeScript `
-                        -ErrorAction Stop
-                } finally {
-                    if ($crossSub -and $originalCtx) {
-                        Set-AzContext -Subscription $originalCtx.Subscription.Id -ErrorAction SilentlyContinue | Out-Null
-                    }
-                }
+                    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  VM Run Command on $vmName (attempt $attempt/$maxAttempts, timeout: 180s)..."
+                    try { Sync-PhaseLogs-ToDashboard } catch { }
 
+                    # Switch context for cross-subscription VMs
+                    $originalCtx = $null
+                    if ($crossSub) {
+                        $originalCtx = Get-AzContext
+                        Set-AzContext -Subscription $vmSubId -ErrorAction Stop | Out-Null
+                        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Switched to VM subscription: $vmSubId"
+                    }
+                    try {
+                        # Run with timeout to prevent indefinite hang
+                        # Use Start-ThreadJob (not Start-Job) — Azure Functions doesn't support out-of-process jobs
+                        $runCmdJob = Start-ThreadJob -ScriptBlock {
+                            param($rg, $vm, $script)
+                            Invoke-AzVMRunCommand -ResourceGroupName $rg -VMName $vm `
+                                -CommandId 'RunShellScript' -ScriptString $script -ErrorAction Stop
+                        } -ArgumentList $vmRg, $vmName, $scrapeScript
+
+                        $timeoutSec = 180  # 3 minute timeout
+                        $completed = $runCmdJob | Wait-Job -Timeout $timeoutSec
+                        if (-not $completed) {
+                            $runCmdJob | Stop-Job
+                            $runCmdJob | Remove-Job -Force
+                            throw "VM Run Command timed out after ${timeoutSec}s on $vmName (likely queued behind another command or VM agent unresponsive)"
+                        }
+                        if ($runCmdJob.State -eq 'Failed') {
+                            $jobError = $runCmdJob | Receive-Job -ErrorAction SilentlyContinue 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }
+                            $runCmdJob | Remove-Job -Force
+                            throw ($jobError | Select-Object -First 1)
+                        }
+                        $result = $runCmdJob | Receive-Job
+                        $runCmdJob | Remove-Job -Force
+                    } finally {
+                        if ($crossSub -and $originalCtx) {
+                            Set-AzContext -Subscription $originalCtx.Subscription.Id -ErrorAction SilentlyContinue | Out-Null
+                        }
+                    }
+                    break  # Success — exit retry loop
+                }
+                catch {
+                    if ($attempt -lt $maxAttempts) {
+                        Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "  VM Run Command attempt $attempt failed: $_. Retrying in ${retryDelaySec}s..."
+                        try { Sync-PhaseLogs-ToDashboard } catch { }
+                        Start-Sleep -Seconds $retryDelaySec
+                    } else {
+                        Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "  VM Run Command failed after $maxAttempts attempts: $_"
+                    }
+                    continue
+                }
+            }  # end retry loop
+
+            if ($result) {
                 $stdout = ($result.Value | Where-Object { $_.Code -eq 'ProvisioningState/succeeded' -or $_.Code -match 'stdout' }).Message
                 if (-not $stdout) {
                     $stdout = ($result.Value | Select-Object -First 1).Message
@@ -124,13 +173,15 @@ function Invoke-Phase6 {
 
                 if ($scrapeOutput -and $scrapeOutput.Length -ge 20) {
                     $scrapeSuccess = $true
-                    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  VM Run Command succeeded"
+                    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  VM Run Command succeeded ($($scrapeOutput.Length) chars)"
                 } else {
-                    Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "  VM Run Command returned empty/short output"
+                    Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "  VM Run Command returned empty/short output (length=$($scrapeOutput.Length))"
+                    # Log raw stdout for debugging
+                    if ($stdout) {
+                        $rawPreview = if ($stdout.Length -gt 300) { $stdout.Substring(0, 300) + '...' } else { $stdout }
+                        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Raw stdout: $rawPreview"
+                    }
                 }
-            }
-            catch {
-                Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "  VM Run Command failed: $_"
             }
         }
 
@@ -192,6 +243,12 @@ function Invoke-Phase6 {
         $allNodeMetrics[$hostname] = $parsed
 
         Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  ${hostname}: $($parsed.Count) metric lines parsed"
+        # Debug: log first 3 metric entries to show label structure
+        $sampleEntries = $parsed | Select-Object -First 3
+        foreach ($entry in $sampleEntries) {
+            $labelStr = ($entry.Labels.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '
+            Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "    Sample: $($entry.MetricName){$labelStr} = $($entry.Value)"
+        }
 
         # Check if this node is DC
         $nodeDC = Get-DCNode -ParsedMetrics $parsed
@@ -219,8 +276,16 @@ function Invoke-Phase6 {
     }
 
     if (-not $dcMetricsRaw) {
-        Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Could not identify DC node or scrape its metrics"
-        Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message 'Cannot identify DC node'
+        Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Could not identify DC node or scrape its metrics. Nodes scraped: $($allNodeMetrics.Count)/$($nodes.Count)"
+        if ($allNodeMetrics.Count -eq 0) {
+            Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "No metrics were obtained from any node. Check: 1) Exporter is running (port $scrapePort), 2) VM Run Command has access, 3) curl is available on VMs"
+        } else {
+            foreach ($hn in $allNodeMetrics.Keys) {
+                $dcCheck = Get-DCNode -ParsedMetrics $allNodeMetrics[$hn]
+                Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Node $hn returned $($allNodeMetrics[$hn].Count) metric lines, DC reported as: $dcCheck"
+            }
+        }
+        Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message "Cannot identify DC node (scraped $($allNodeMetrics.Count)/$($nodes.Count) nodes)" -DurationSeconds ([int](New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds)
         return
     }
 
@@ -256,15 +321,17 @@ function Invoke-Phase6 {
     # This prevents cross-contamination when multiple HA clusters share the same SID/clusterName
     $nodeHostnames = $nodes | ForEach-Object { $_.hostname }
     $hostnameFilter = ($nodeHostnames | ForEach-Object { "'$_'" }) -join ', '
-    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Filtering KQL by hostnames: $hostnameFilter"
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Filtering KQL by hostnames: $hostnameFilter (OS: $($Config['os_type']))"
 
-    # Resource Status query — gets ALL resources (active + stopped) from same correlation_id
-    # Uses status='active' filter with max(value_d) to determine actual state:
-    #   max_val=1 → resource is running; max_val=0 → resource is stopped/offline
+    # Unified KQL queries — AMS normalizes both SUSE and RHEL/PCP into the same LA schema:
+    #   name_s = 'ha_cluster_pacemaker_nodes' with labels: {node, status, type}
+    #   name_s = 'ha_cluster_pacemaker_resources' with labels: {resource, node, status, managed}
+    # Note: RHEL/PCP data in LA lacks 'agent' and 'role' labels (empty strings)
     $resourceQuery = @"
 let master = materialize(Prometheus_HaClusterExporter_CL
 | where TimeGenerated > ago(40min)
 | where value_d == 1
+| where name_s == 'ha_cluster_pacemaker_nodes'
 | extend node_status=parse_json(labels_s)
 | where node_status['status']=='dc'
 | where sid_s == '$sid'
@@ -278,19 +345,16 @@ Prometheus_HaClusterExporter_CL
 | where correlation_id_g in (master)
 | where name_s == 'ha_cluster_pacemaker_resources'
 | extend resources = parse_json(labels_s)
-| where isnotnull(resources['agent'])
 | where tostring(resources['status']) == 'active'
 | summarize max_val=max(value_d) by resource_resource = tostring(resources['resource']), resource_agent = tostring(resources['agent']), resource_node = tostring(resources['node']), resource_managed = tostring(resources['managed']), resource_role = tostring(resources['role'])
 | extend resource_state = iif(max_val == 1, 'active', 'stopped')
 "@
 
-    $kqlResourceResult = Invoke-KqlQuery -WorkspaceId $workspaceId -Query $resourceQuery -Timespan 'PT2H' -Phase $PhaseName
-
-    # Node Status query
     $nodeQuery = @"
 let master = Prometheus_HaClusterExporter_CL
 | where TimeGenerated > ago(10min)
 | where value_d == 1
+| where name_s == 'ha_cluster_pacemaker_nodes'
 | extend node_status=parse_json(labels_s)
 | where node_status['status']=='dc'
 | where tostring(node_status['node']) == hostname_s
@@ -308,7 +372,33 @@ Prometheus_HaClusterExporter_CL
 | project node = tostring(resources['node']), type = tostring(resources['type']), status = tostring(resources['status'])
 "@
 
+    $locationConstraintQuery = @"
+let master = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(10min)
+| where value_d == 1
+| where name_s == 'ha_cluster_pacemaker_nodes'
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where tostring(node_status['node']) == hostname_s
+| where sid_s == '$sid'
+| where clusterName_s == '$clusterName'
+| where hostname_s in ($hostnameFilter)
+| summarize arg_max(TimeGenerated, correlation_id_g) by sid_s, clusterName_s, hostname_s
+| top 1 by TimeGenerated
+| project correlation_id_g;
+Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| where name_s == 'ha_cluster_pacemaker_location_constraints'
+| extend resources = parse_json(labels_s)
+| extend constraint_name = coalesce(tostring(resources['constraint']), tostring(resources['instname']))
+| where constraint_name startswith 'cli-ban' or constraint_name startswith 'cli-prefer'
+| project constraint = constraint_name
+| distinct constraint
+"@
+
+    $kqlResourceResult = Invoke-KqlQuery -WorkspaceId $workspaceId -Query $resourceQuery -Timespan 'PT2H' -Phase $PhaseName
     $kqlNodeResult = Invoke-KqlQuery -WorkspaceId $workspaceId -Query $nodeQuery -Timespan 'PT2H' -Phase $PhaseName
+    $kqlConstraintResult = Invoke-KqlQuery -WorkspaceId $workspaceId -Query $locationConstraintQuery -Timespan 'PT2H' -Phase $PhaseName
 
     if (-not $kqlResourceResult.Success) {
         Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Resource status KQL query failed"
@@ -324,8 +414,9 @@ Prometheus_HaClusterExporter_CL
 
     $kqlResources = $kqlResourceResult.Results
     $kqlNodes = $kqlNodeResult.Results
+    $kqlConstraints = if ($kqlConstraintResult.Success) { $kqlConstraintResult.Results } else { @() }
 
-    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  KQL reports: $($kqlResources.Count) resource entries, $($kqlNodes.Count) node entries"
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  KQL reports: $($kqlResources.Count) resource entries, $($kqlNodes.Count) node entries, $($kqlConstraints.Count) location constraints"
 
     # =========================================================================
     # Step 4: Compare Resources — Exporter vs Workbook (KQL)
@@ -445,6 +536,41 @@ Prometheus_HaClusterExporter_CL
             $totalChecks++
             $warnCount++
             Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "[WARN] Node '$kqlNodeName' in workbook but NOT in exporter (stale)"
+        }
+    }
+
+    # =========================================================================
+    # Step 5b: Compare Location Constraints — Exporter vs Workbook (KQL)
+    # =========================================================================
+    $exporterConstraints = Get-ExporterLocationConstraints -ParsedMetrics $parsedMetrics
+    $exporterConstraintNames = @($exporterConstraints | ForEach-Object { $_.Constraint } | Select-Object -Unique | Sort-Object)
+    $kqlConstraintNames = @($kqlConstraints | ForEach-Object { $_.constraint } | Select-Object -Unique | Sort-Object)
+
+    if ($exporterConstraintNames.Count -eq 0 -and $kqlConstraintNames.Count -eq 0) {
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "=== LOCATION CONSTRAINTS: None present (skipping comparison) ==="
+    } else {
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "=== LOCATION CONSTRAINTS COMPARISON ==="
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "  Exporter: $($exporterConstraintNames.Count) constraints | KQL: $($kqlConstraintNames.Count) constraints"
+
+        # Check: Every exporter constraint should exist in KQL
+        foreach ($expConstraint in $exporterConstraintNames) {
+            $totalChecks++
+            if ($expConstraint -in $kqlConstraintNames) {
+                $passCount++
+                Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "[PASS] Location constraint '$expConstraint' present in both exporter and KQL"
+            } else {
+                $warnCount++
+                Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "[WARN] Location constraint '$expConstraint' in exporter but NOT in KQL (ingestion delay)"
+            }
+        }
+
+        # Check: KQL constraints not in exporter (stale/recently removed)
+        foreach ($kqlConstraint in $kqlConstraintNames) {
+            if ($kqlConstraint -notin $exporterConstraintNames) {
+                $totalChecks++
+                $warnCount++
+                Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "[WARN] Location constraint '$kqlConstraint' in KQL but NOT in exporter (stale/removed)"
+            }
         }
     }
 

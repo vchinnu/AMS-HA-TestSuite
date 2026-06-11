@@ -154,7 +154,41 @@ function Invoke-Phase1 {
     }
 
     $allSuccess = $true
+    $nodesToInstall = @()
+
+    # --- Pre-check: Skip nodes where exporter endpoint is already responding ---
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Pre-checking exporter endpoints on all nodes..."
     foreach ($node in $nodes) {
+        $hostname = $node['hostname']
+        $verifyScript = Get-VerifyScript -OsType $osType
+        $result = Invoke-VMCommand -Config $Config -Node $node -ScriptContent $verifyScript -Phase $PhaseName
+
+        if ($result.Success -and $result.Output -match 'OK\|(\d+)') {
+            $metricCount = $Matches[1]
+            Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Endpoint already active on ${hostname}: $metricCount ha_cluster metrics — skipping install"
+        } else {
+            Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Endpoint not responding on $hostname — will install"
+            $nodesToInstall += $node
+        }
+    }
+
+    if ($nodesToInstall.Count -eq 0) {
+        Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "All nodes already have working exporter endpoints. Skipping installation."
+        $duration = [int](New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds
+        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "Exporter already running on all $($nodes.Count) nodes (skipped install)" -DurationSeconds $duration
+        return
+    }
+
+    # Request user consent only for nodes that need installation
+    $nodeNames = ($nodesToInstall | ForEach-Object { $_['hostname'] }) -join ', '
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Installing on $($nodesToInstall.Count)/$($nodes.Count) nodes: $nodeNames"
+    $consentGranted = Request-UserConsent -Action "Install HA cluster exporter on nodes: $nodeNames" -Phase $PhaseName
+    if (-not $consentGranted) {
+        Set-PhaseResult -Phase $PhaseName -Status 'Skipped' -Message 'User declined installation'
+        return
+    }
+
+    foreach ($node in $nodesToInstall) {
         $hostname = $node['hostname']
         Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Installing on node: $hostname ($($node['ip_address']))"
 
@@ -173,11 +207,13 @@ function Invoke-Phase1 {
         }
     }
 
-    # Post-install verification (give services time to stabilize)
-    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Waiting 10 seconds for services to stabilize..."
-    Start-Sleep -Seconds 10
+    # Post-install verification only for nodes that were newly installed
+    if ($nodesToInstall.Count -gt 0) {
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Waiting 10 seconds for services to stabilize..."
+        Start-Sleep -Seconds 10
+    }
 
-    foreach ($node in $nodes) {
+    foreach ($node in $nodesToInstall) {
         $hostname = $node['hostname']
         $verifyScript = Get-VerifyScript -OsType $osType
         $result = Invoke-VMCommand -Config $Config -Node $node -ScriptContent $verifyScript -Phase $PhaseName

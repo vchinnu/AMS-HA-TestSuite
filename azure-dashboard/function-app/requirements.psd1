@@ -9,4 +9,5 @@
     'Az.Resources'           = '6.*'
     'Az.Workloads'           = '1.*'
     'AzTable'                = '2.*'
+    'ThreadJob'              = '2.*'
 }

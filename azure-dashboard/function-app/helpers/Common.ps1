@@ -4,8 +4,8 @@
 
 #Requires -Modules Az.Accounts
 
-$script:LogEntries = [System.Collections.ArrayList]::new()
-$script:PhaseResults = [System.Collections.ArrayList]::new()
+if (-not $script:LogEntries) { $script:LogEntries = [System.Collections.ArrayList]::new() }
+if (-not $script:PhaseResults) { $script:PhaseResults = [System.Collections.ArrayList]::new() }
 
 # --- YAML Helpers ---
 function ConvertTo-YamlValue {
@@ -408,13 +408,27 @@ function Test-SubnetConnectivity {
         return $true
     }
 
-    # Check if peering already exists
+    # Check if peering already exists on the AMS VNet side
     $peerings = Get-AzVirtualNetworkPeering -VirtualNetworkName $amsVnetName -ResourceGroupName $amsVnetRg -ErrorAction SilentlyContinue
     $existingPeering = $peerings | Where-Object { $_.RemoteVirtualNetwork.Id -match $clusterVnetName }
     
     if ($existingPeering -and $existingPeering.PeeringState -eq 'Connected') {
-        Write-PhaseLog -Phase $Phase -Level 'SUCCESS' -Message "VNet peering already exists and is connected."
+        Write-PhaseLog -Phase $Phase -Level 'SUCCESS' -Message "VNet peering already exists (AMS -> Cluster) and is connected."
         return $true
+    }
+
+    # Also check the cluster/source VM VNet side for existing peering to ANY AMS VNet
+    # (handles retries where a previous run's AMS VNet already has a valid peering)
+    $clusterPeerings = Get-AzVirtualNetworkPeering -VirtualNetworkName $clusterVnetName -ResourceGroupName $clusterVnetRg -ErrorAction SilentlyContinue
+    if ($clusterPeerings) {
+        $amsLikePeering = $clusterPeerings | Where-Object {
+            $_.PeeringState -eq 'Connected' -and $_.RemoteVirtualNetwork.Id -match 'ams-.*-ha-test'
+        }
+        if ($amsLikePeering) {
+            $remoteName = ($amsLikePeering.RemoteVirtualNetwork.Id -split '/')[-1]
+            Write-PhaseLog -Phase $Phase -Level 'SUCCESS' -Message "Cluster VNet already has active peering to AMS VNet '$remoteName'. Using existing connectivity."
+            return $true
+        }
     }
 
     return $false

@@ -118,7 +118,8 @@ function Get-AllExporterResources {
         [array]$ParsedMetrics
     )
 
-    $resources = $ParsedMetrics | Where-Object {
+    # SUSE format: ha_cluster_pacemaker_resources{status="active",resource="xxx",...} 1/0
+    $suseResources = $ParsedMetrics | Where-Object {
         $_.MetricName -eq 'ha_cluster_pacemaker_resources' -and $_.Labels['status'] -eq 'active'
     } | ForEach-Object {
         $isActive = ($_.Value -eq 1)
@@ -135,6 +136,38 @@ function Get-AllExporterResources {
         }
     }
 
+    # RHEL/PCP format: ha_cluster_pacemaker_resources_status_active{instname="xxx",...} 1/0
+    # instname format: "resource_name:node_name" (active) or just "resource_name" (no node assignment)
+    # When no colon, AMS stores hostname as node in LA, so we do the same for consistent comparison
+    $pcpResources = $ParsedMetrics | Where-Object {
+        $_.MetricName -eq 'ha_cluster_pacemaker_resources_status_active'
+    } | ForEach-Object {
+        $isActive = ($_.Value -eq 1)
+        $instname = $_.Labels['instname']
+        # Split on FIRST colon only — resource names can contain colons
+        $colonIdx = if ($instname) { $instname.IndexOf(':') } else { -1 }
+        if ($colonIdx -gt 0) {
+            $resourceName = $instname.Substring(0, $colonIdx)
+            $nodeName = $instname.Substring($colonIdx + 1)
+        } else {
+            $resourceName = $instname
+            # Use hostname label as node (matches AMS LA normalization)
+            $nodeName = $_.Labels['hostname']
+        }
+        [PSCustomObject]@{
+            Resource      = $resourceName
+            Agent         = ''
+            Node          = $nodeName
+            Role          = ''  # AMS normalizes RHEL/PCP data with empty role in LA
+            ResourceState = if ($isActive) { 'active' } else { 'stopped' }
+            Managed       = ''
+            Clone         = ''
+            Group         = ''
+            Value         = $_.Value
+        }
+    }
+
+    $resources = @($suseResources) + @($pcpResources) | Where-Object { $_ }
     return $resources
 }
 
@@ -143,7 +176,7 @@ function Get-AllExporterResources {
     Extracts pacemaker nodes from parsed Prometheus metrics.
 .DESCRIPTION
     Returns structured node objects with node name, type, status.
-    Only returns entries with value=1.
+    Handles both SUSE (labels) and RHEL/PCP (metric name suffix) formats.
 #>
 function Get-ExporterNodes {
     param(
@@ -151,7 +184,8 @@ function Get-ExporterNodes {
         [array]$ParsedMetrics
     )
 
-    $nodes = $ParsedMetrics | Where-Object {
+    # SUSE format: ha_cluster_pacemaker_nodes{node="xxx",type="member",status="online"} 1
+    $suseNodes = $ParsedMetrics | Where-Object {
         $_.MetricName -eq 'ha_cluster_pacemaker_nodes' -and $_.Value -eq 1
     } | ForEach-Object {
         [PSCustomObject]@{
@@ -161,6 +195,20 @@ function Get-ExporterNodes {
         }
     }
 
+    # RHEL/PCP format: ha_cluster_pacemaker_nodes_status_dc{instname="xxx",...} 1
+    $pcpNodes = $ParsedMetrics | Where-Object {
+        $_.MetricName -match '^ha_cluster_pacemaker_nodes_status_' -and $_.Value -eq 1
+    } | ForEach-Object {
+        # Extract status from metric name suffix
+        $status = if ($_.MetricName -match '_status_(.+)$') { $Matches[1] } else { 'unknown' }
+        [PSCustomObject]@{
+            Node   = $_.Labels['instname'] ?? $_.Labels['hostname']
+            Type   = 'member'
+            Status = $status
+        }
+    }
+
+    $nodes = @($suseNodes) + @($pcpNodes) | Where-Object { $_ }
     return $nodes
 }
 
@@ -176,14 +224,42 @@ function Get-DCNode {
         [array]$ParsedMetrics
     )
 
+    # Method 1: SUSE format - ha_cluster_pacemaker_nodes{status="dc"} 1
     $dcEntry = $ParsedMetrics | Where-Object {
         $_.MetricName -eq 'ha_cluster_pacemaker_nodes' -and
         $_.Value -eq 1 -and
-        $_.Labels['status'] -eq 'dc'
+        ($_.Labels['status'] -eq 'dc' -or $_.Labels['type'] -eq 'dc')
     } | Select-Object -First 1
 
     if ($dcEntry) {
-        return $dcEntry.Labels['node']
+        $nodeName = $dcEntry.Labels['node']
+        if (-not $nodeName) { $nodeName = $dcEntry.Labels['hostname'] }
+        if (-not $nodeName) { $nodeName = $dcEntry.Labels['instance'] }
+        return $nodeName
+    }
+
+    # Method 2: RHEL/PCP format - ha_cluster_pacemaker_nodes_status_dc{instname="nodeX"} 1
+    $dcPcp = $ParsedMetrics | Where-Object {
+        $_.MetricName -eq 'ha_cluster_pacemaker_nodes_status_dc' -and
+        $_.Value -eq 1
+    } | Select-Object -First 1
+
+    if ($dcPcp) {
+        $nodeName = $dcPcp.Labels['instname']
+        if (-not $nodeName) { $nodeName = $dcPcp.Labels['node'] }
+        if (-not $nodeName) { $nodeName = $dcPcp.Labels['hostname'] }
+        return $nodeName
+    }
+
+    # Fallback: any metric with 'nodes' and 'dc' in the name, value=1
+    $dcFallback = $ParsedMetrics | Where-Object {
+        $_.MetricName -match 'pacemaker_nodes.*dc' -and $_.Value -eq 1
+    } | Select-Object -First 1
+
+    if ($dcFallback) {
+        foreach ($key in @('instname', 'node', 'hostname', 'instance', 'name')) {
+            if ($dcFallback.Labels[$key]) { return $dcFallback.Labels[$key] }
+        }
     }
     return $null
 }
@@ -251,7 +327,42 @@ function ConvertTo-WorkbookStatus {
     return 'inactive'
 }
 
+<#
+.SYNOPSIS
+    Extracts location constraints (cli-ban, cli-prefer) from parsed Prometheus metrics.
+.DESCRIPTION
+    Returns constraint names from ha_cluster_pacemaker_location_constraints where value=1.
+    Handles both SUSE (constraint label) and RHEL/PCP (instname label) formats.
+    Only returns constraints starting with 'cli-ban' or 'cli-prefer' (matching workbook filter).
+#>
+function Get-ExporterLocationConstraints {
+    param(
+        [Parameter(Mandatory)]
+        [array]$ParsedMetrics
+    )
+
+    $constraints = $ParsedMetrics | Where-Object {
+        $_.MetricName -eq 'ha_cluster_pacemaker_location_constraints' -and $_.Value -eq 1
+    } | ForEach-Object {
+        # SUSE format: ha_cluster_pacemaker_location_constraints{constraint="cli-ban-xxx",node="...",resource="...",role="...",score="..."} 1
+        # RHEL/PCP format: ha_cluster_pacemaker_location_constraints{instname="cli-ban-xxx"} 1
+        $constraint = $_.Labels['constraint']
+        if (-not $constraint) { $constraint = $_.Labels['instname'] }
+        if ($constraint -and ($constraint -match '^cli-ban' -or $constraint -match '^cli-prefer')) {
+            [PSCustomObject]@{
+                Constraint = $constraint
+                Node       = $_.Labels['node']
+                Resource   = $_.Labels['resource']
+                Role       = $_.Labels['role']
+                Score      = $_.Labels['score']
+            }
+        }
+    } | Where-Object { $_ }
+
+    return $constraints
+}
+
 # Guard Export-ModuleMember for dot-sourcing
 if ($MyInvocation.MyCommand.ScriptBlock.Module) {
-    Export-ModuleMember -Function ConvertFrom-PrometheusMetrics, Get-ExporterResources, Get-ExporterNodes, Get-DCNode, Get-ExporterMetricFamilies, ConvertTo-WorkbookRole, ConvertTo-WorkbookStatus
+    Export-ModuleMember -Function ConvertFrom-PrometheusMetrics, Get-ExporterResources, Get-AllExporterResources, Get-ExporterNodes, Get-DCNode, Get-ExporterMetricFamilies, Get-ExporterLocationConstraints, ConvertTo-WorkbookRole, ConvertTo-WorkbookStatus
 }

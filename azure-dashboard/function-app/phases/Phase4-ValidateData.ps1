@@ -82,8 +82,12 @@ Prometheus_HaClusterExporter_CL
         return
     }
 
-    # --- Validate metric content ---
-    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Validating metric content..."
+    # Brief wait for metrics to accumulate before starting validation
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Data detected. Waiting 60s for more metrics to accumulate before validation..."
+    Start-Sleep -Seconds 60
+
+    # --- Validate metric content (with retry — metrics accumulate over time) ---
+    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Validating metric content (will retry up to 10 min for all metric families)..."
 
     # Check expected metric families exist
     $metricQuery = @"
@@ -92,26 +96,74 @@ Prometheus_HaClusterExporter_CL
 | distinct name_s
 | order by name_s asc
 "@
-    $metricResult = Invoke-KqlQuery -WorkspaceId $workspaceId -Query $metricQuery -Timespan 'PT1H' -Phase $PhaseName
 
-    $expectedMetricPrefixes = @(
+    # Required: must always be present for a healthy HA cluster
+    # Conditional: only present if feature is active (SBD configured, location constraints set)
+    $requiredPrefixes = @(
         'ha_cluster_pacemaker_nodes',
         'ha_cluster_pacemaker_resources',
-        'ha_cluster_corosync',
-        'ha_cluster_sbd'
+        'ha_cluster_corosync'
     )
+    $conditionalPrefixes = @(
+        'ha_cluster_sbd',                            # Only if SBD stonith is configured
+        'ha_cluster_pacemaker_location_constraints'  # Only if cli-ban/cli-prefer rules exist
+    )
+    $expectedMetricPrefixes = $requiredPrefixes + $conditionalPrefixes
 
-    $foundMetrics = if ($metricResult.Results) { $metricResult.Results | ForEach-Object { $_.name_s } } else { @() }
+    $metricRetryMax = 600  # 10 minutes
+    $metricRetryInterval = 60  # check every 60 seconds
+    $metricElapsed = 0
     $missingPrefixes = @()
+    $foundMetrics = @()
 
-    foreach ($prefix in $expectedMetricPrefixes) {
-        $found = $foundMetrics | Where-Object { $_ -like "$prefix*" }
-        if ($found) {
-            Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Found metric family: $prefix ($($found.Count) variants)"
-        } else {
-            Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "Missing metric family: $prefix"
-            $missingPrefixes += $prefix
+    while ($metricElapsed -lt $metricRetryMax) {
+        $metricResult = Invoke-KqlQuery -WorkspaceId $workspaceId -Query $metricQuery -Timespan 'PT1H' -Phase $PhaseName
+
+        $foundMetrics = if ($metricResult.Results) { $metricResult.Results | ForEach-Object { $_.name_s } } else { @() }
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Found $($foundMetrics.Count) distinct metric names in LA (${metricElapsed}s elapsed)"
+        
+        # Log actual metric names found for debugging
+        if ($foundMetrics.Count -gt 0 -and $foundMetrics.Count -le 50) {
+            Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Metrics in LA: $($foundMetrics -join ', ')"
         }
+
+        $missingPrefixes = @()
+        foreach ($prefix in $expectedMetricPrefixes) {
+            $found = $foundMetrics | Where-Object { $_ -like "$prefix*" }
+            if ($found) {
+                Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "Found metric family: $prefix ($($found.Count) variants)"
+            } else {
+                $missingPrefixes += $prefix
+            }
+        }
+
+        # Check if all REQUIRED prefixes are present (conditional ones are allowed to be missing)
+        $missingRequired = $missingPrefixes | Where-Object { $_ -in $requiredPrefixes }
+        $missingConditional = $missingPrefixes | Where-Object { $_ -in $conditionalPrefixes }
+
+        if ($missingRequired.Count -eq 0) {
+            if ($missingConditional.Count -eq 0) {
+                Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "All expected metric families are present!"
+            } else {
+                Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "All required metrics present. Conditional metrics not found (OK): $($missingConditional -join ', ')"
+            }
+            break
+        }
+
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Still missing $($missingRequired.Count) required families: $($missingRequired -join ', '). Retrying in ${metricRetryInterval}s..."
+        Start-Sleep -Seconds $metricRetryInterval
+        $metricElapsed += $metricRetryInterval
+    }
+
+    $missingRequired = @($missingPrefixes | Where-Object { $_ -in $requiredPrefixes })
+    $missingConditional = @($missingPrefixes | Where-Object { $_ -in $conditionalPrefixes })
+
+    if ($missingRequired.Count -gt 0) {
+        Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "After ${metricRetryMax}s, still missing REQUIRED: $($missingRequired -join ', ')"
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "All metrics found in LA: $($foundMetrics -join ', ')"
+    }
+    if ($missingConditional.Count -gt 0) {
+        Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Conditional metrics not found (acceptable): $($missingConditional -join ', ')"
     }
 
     # --- Validate node coverage (DC node dedup means only 1 node pushes) ---
@@ -131,10 +183,15 @@ Prometheus_HaClusterExporter_CL
     }
 
     $duration = [int](New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds
-    if ($missingPrefixes.Count -eq 0) {
-        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "All expected metric families present in LA" -DurationSeconds $duration
-    } elseif ($missingPrefixes.Count -le 1) {
-        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "Most metrics present; missing: $($missingPrefixes -join ', ')" -DurationSeconds $duration
+    if ($missingRequired.Count -eq 0 -and $missingConditional.Count -eq 0) {
+        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "All metric families present in LA (5/5)" -DurationSeconds $duration
+    } elseif ($missingRequired.Count -eq 0) {
+        # All required present, only conditional missing — still pass
+        $foundCount = $expectedMetricPrefixes.Count - $missingPrefixes.Count
+        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "Required metrics present ($foundCount/$($expectedMetricPrefixes.Count)); conditional not active: $($missingConditional -join ', ')" -DurationSeconds $duration
+    } elseif ($missingRequired.Count -eq 1) {
+        # 1 required missing — pass with warning (could be timing)
+        Set-PhaseResult -Phase $PhaseName -Status 'Passed' -Message "Mostly present; missing required: $($missingRequired -join ', ')" -DurationSeconds $duration
     } else {
         Set-PhaseResult -Phase $PhaseName -Status 'Failed' -Message "Missing metric families: $($missingPrefixes -join ', ')" -DurationSeconds $duration
     }

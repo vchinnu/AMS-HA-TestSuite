@@ -12,8 +12,9 @@ Write-Host "Connected." -ForegroundColor Green
 # Disable global dashboard flush (we're running locally)
 $global:DashboardFlushEnabled = $false
 
-# Source helpers
-. (Join-Path $PSScriptRoot 'helpers\Common.ps1')
+# Source helpers (single source of truth in azure-dashboard/function-app)
+$FuncAppDir = Join-Path $PSScriptRoot 'azure-dashboard\function-app'
+. (Join-Path $FuncAppDir 'helpers\Common.ps1')
 
 # Build config matching what the dashboard sends
 $config = @{
@@ -43,7 +44,7 @@ $config = @{
 
 # Source and run Phase 1
 Write-Host "`n=== Running Phase 1 locally ===" -ForegroundColor Yellow
-. (Join-Path $PSScriptRoot 'phases\Phase1-InstallExporter.ps1')
+. (Join-Path $FuncAppDir 'phases\Phase1-InstallExporter.ps1')
 Invoke-Phase1 -Config $config
 
 # Show results

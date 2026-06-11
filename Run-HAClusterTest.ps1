@@ -15,11 +15,12 @@ param(
 $ErrorActionPreference = 'Continue'
 $script:RootDir = $PSScriptRoot
 
-# Load helpers
-. (Join-Path $PSScriptRoot 'helpers\Common.ps1')
-. (Join-Path $PSScriptRoot 'helpers\KqlRunner.ps1')
-. (Join-Path $PSScriptRoot 'helpers\HtmlReportGenerator.ps1')
-. (Join-Path $PSScriptRoot 'helpers\ReportStorage.ps1')
+# Load helpers (single source of truth in azure-dashboard/function-app)
+$script:FuncAppDir = Join-Path $PSScriptRoot 'azure-dashboard\function-app'
+. (Join-Path $script:FuncAppDir 'helpers\Common.ps1')
+. (Join-Path $script:FuncAppDir 'helpers\KqlRunner.ps1')
+. (Join-Path $script:FuncAppDir 'helpers\HtmlReportGenerator.ps1')
+. (Join-Path $script:FuncAppDir 'helpers\ReportStorage.ps1')
 
 # --- Banner ---
 function Show-Banner {
@@ -118,7 +119,7 @@ function Invoke-PhaseByNumber {
         7 { 'Phase7-Cleanup.ps1' }
     }
 
-    $scriptPath = Join-Path $PSScriptRoot "phases\$phaseScript"
+    $scriptPath = Join-Path $script:FuncAppDir "phases\$phaseScript"
     if (-not (Test-Path $scriptPath)) {
         Write-PhaseLog -Phase "Phase$PhaseNum" -Level 'ERROR' -Message "Script not found: $scriptPath"
         return
