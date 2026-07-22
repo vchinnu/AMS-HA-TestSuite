@@ -118,7 +118,7 @@ function Update-RunStatus {
 function Write-DashboardLog {
     param([string]$Message, [int]$Phase = 0)
     [void]$script:dashboardLogs.Add(@{
-        time    = (Get-Date -Format 'HH:mm:ss')
+        time    = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         phase   = $Phase
         message = $Message
     })
@@ -142,7 +142,7 @@ function Sync-PhaseLogs-ToDashboard {
     $newLogs = @($phaseLogs | Select-Object -Skip $lastSyncCount)
     foreach ($pl in $newLogs) {
         [void]$script:dashboardLogs.Add(@{
-            time    = if ($pl.Timestamp) { ($pl.Timestamp -split ' ')[-1] } else { (Get-Date -Format 'HH:mm:ss') }
+            time    = if ($pl.Timestamp) { $pl.Timestamp } else { (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') }
             phase   = $script:currentPhaseNum
             message = "[$($pl.Level)] $($pl.Message)"
         })

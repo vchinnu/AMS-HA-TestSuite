@@ -89,7 +89,7 @@ function Sanitize-Entity {
 function Write-DashboardLog {
     param([string]$Message, [int]$Phase = 0)
     $entry = @{
-        time    = (Get-Date -Format 'HH:mm:ss')
+        time    = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         phase   = $Phase
         message = $Message
     }
@@ -131,7 +131,7 @@ function Sync-PhaseLogs-ToDashboard {
     $newLogs = @($phaseLogs | Select-Object -Skip $lastSyncCount)
     foreach ($pl in $newLogs) {
         [void]$script:dashboardLogs.Add(@{
-            time    = if ($pl.Timestamp) { ($pl.Timestamp -split ' ')[-1] } else { (Get-Date -Format 'HH:mm:ss') }
+            time    = if ($pl.Timestamp) { $pl.Timestamp } else { (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') }
             phase   = $script:currentPhaseNum
             message = "[$($pl.Level)] $($pl.Message)"
         })
@@ -323,7 +323,16 @@ try {
 # Regenerate report with final results
 try {
     . (Join-Path $helpersDir 'HtmlReportGenerator.ps1')
-    $logEntries = Get-LogEntries
+    # Convert dashboard logs (all phases) to the format expected by New-TestReport
+    $logEntries = $script:dashboardLogs | ForEach-Object {
+        $msg = $_.message
+        $level = 'INFO'
+        if ($msg -match '^\[(INFO|WARN|ERROR|SUCCESS)\]\s*(.*)$') {
+            $level = $Matches[1]
+            $msg = $Matches[2]
+        }
+        @{ Timestamp = $_.time; Phase = "Phase$($_.phase)"; Level = $level; Message = $msg }
+    }
     $reportDir = $env:TEMP
     $reportFile = New-TestReport -PhaseResults $phaseResults -LogEntries $logEntries `
         -Config $config -OutputPath $reportDir

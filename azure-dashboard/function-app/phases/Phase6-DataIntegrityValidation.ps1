@@ -67,17 +67,19 @@ function Invoke-Phase6 {
     Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Execution method: $execMethod"
 
     # Shell command to scrape exporter (OS-specific port and URL)
+    # Both OS types filter to value=1 node metrics only (parser ignores value=0)
+    # to stay within 4KB VM Run Command stdout limit on larger clusters
     if ($Config['os_type'] -eq 'SUSE') {
         $scrapePort = 9664
         $scrapeUrl = "http://localhost:$scrapePort/metrics"
-        # SUSE: status is a label; get nodes + active resources + location constraints (~25 lines, well within 4KB)
-        $scrapeScript = "curl -s '$scrapeUrl' 2>/dev/null | grep -E '^ha_cluster_pacemaker_nodes|^ha_cluster_pacemaker_resources\{.*status=.active|^ha_cluster_pacemaker_location_constraints'"
+        # SUSE: status is a label; get nodes(value=1) + active resources + location constraints
+        $scrapeScript = "curl -s '$scrapeUrl' 2>/dev/null | awk '(/^ha_cluster_pacemaker_nodes\{/ && / 1$/) || /^ha_cluster_pacemaker_resources\{.*status=.active/ || /^ha_cluster_pacemaker_location_constraints/'"
     } else {
         # RHEL uses PCP/pmproxy on port 44322
         $scrapePort = 44322
         $scrapeUrl = "http://localhost:${scrapePort}/metrics?names=ha_cluster"
-        # RHEL/PCP: status is in metric name suffix; get ALL node statuses + active resources + location constraints
-        $scrapeScript = "curl -s '$scrapeUrl' 2>/dev/null | grep -e '^ha_cluster_pacemaker_nodes_status_' -e '^ha_cluster_pacemaker_resources_status_active' -e '^ha_cluster_pacemaker_location_constraints'"
+        # RHEL/PCP: status is in metric name suffix; get nodes(value=1) + resources + location constraints
+        $scrapeScript = "curl -s '$scrapeUrl' 2>/dev/null | awk '/^ha_cluster_pacemaker_resources_status_active/ || /^ha_cluster_pacemaker_location_constraints/ || (/^ha_cluster_pacemaker_nodes_status_/ && / 1$/)'"
     }
     Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Scrape URL: $scrapeUrl (OS: $($Config['os_type']))"
 
@@ -325,8 +327,11 @@ function Invoke-Phase6 {
 
     # Unified KQL queries — AMS normalizes both SUSE and RHEL/PCP into the same LA schema:
     #   name_s = 'ha_cluster_pacemaker_nodes' with labels: {node, status, type}
-    #   name_s = 'ha_cluster_pacemaker_resources' with labels: {resource, node, status, managed}
-    # Note: RHEL/PCP data in LA lacks 'agent' and 'role' labels (empty strings)
+    #   name_s = 'ha_cluster_pacemaker_resources' with labels: {resource, node, managed}
+    # Note: RHEL/PCP data in LA may lack 'status', 'agent' and 'role' labels (empty/absent)
+    # For SUSE: status is a label ('active','blocked','failed',...); for RHEL: status may be absent
+    # since it was encoded in the PCP metric name suffix (_status_active). We handle both by
+    # accepting status='active' OR empty/missing status, then using value_d for state determination.
     $resourceQuery = @"
 let master = materialize(Prometheus_HaClusterExporter_CL
 | where TimeGenerated > ago(40min)
@@ -343,10 +348,11 @@ let master = materialize(Prometheus_HaClusterExporter_CL
 | project correlation_id_g);
 Prometheus_HaClusterExporter_CL
 | where correlation_id_g in (master)
-| where name_s == 'ha_cluster_pacemaker_resources'
+| where name_s == 'ha_cluster_pacemaker_resources' or name_s == 'ha_cluster_pacemaker_resources_status_active'
 | extend resources = parse_json(labels_s)
-| where tostring(resources['status']) == 'active'
+| where (tostring(resources['status']) == 'active' or strlen(tostring(resources['status'])) == 0)
 | summarize max_val=max(value_d) by resource_resource = tostring(resources['resource']), resource_agent = tostring(resources['agent']), resource_node = tostring(resources['node']), resource_managed = tostring(resources['managed']), resource_role = tostring(resources['role'])
+| where strlen(resource_resource) > 0
 | extend resource_state = iif(max_val == 1, 'active', 'stopped')
 "@
 
@@ -460,17 +466,30 @@ Prometheus_HaClusterExporter_CL
         } else {
             $kqlRes = $kqlMatch | Select-Object -First 1
 
-            # Compare state, role, managed, agent
+            # Compare state (always required)
             $stateMatch = ($expEntry.ResourceState -eq $kqlRes.ResourceState)
-            $roleMatch = ($expEntry.Role -eq $kqlRes.Role)
-            $managedMatch = ($expEntry.Managed -eq $kqlRes.Managed)
-            $agentMatch = ($expEntry.Agent -eq $kqlRes.Agent)
+
+            # For RHEL/PCP, the local exporter scrape doesn't expose agent/role/managed labels
+            # (they come from AMS enrichment in LA). Skip attribute comparison when exporter
+            # values are empty — only state + resource + node matching matters for certification.
+            $skipAttributes = (-not $expEntry.Agent -and -not $expEntry.Role -and -not $expEntry.Managed)
+
+            if ($skipAttributes) {
+                $roleMatch = $true
+                $managedMatch = $true
+                $agentMatch = $true
+            } else {
+                $roleMatch = ($expEntry.Role -eq $kqlRes.Role)
+                $managedMatch = ($expEntry.Managed -eq $kqlRes.Managed)
+                $agentMatch = ($expEntry.Agent -eq $kqlRes.Agent)
+            }
 
             if ($stateMatch -and $roleMatch -and $managedMatch -and $agentMatch) {
                 $passCount++
                 $stateIcon = if ($expEntry.ResourceState -eq 'active') { 'ACTIVE' } else { 'STOPPED' }
                 $nodeDisplay = if ($expEntry.Node) { $expEntry.Node } else { '(none)' }
-                Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "[PASS] $($expEntry.Resource) | $($expEntry.Agent) | node=$nodeDisplay | role=$($expEntry.Role) | state=$stateIcon | managed=$($expEntry.Managed)"
+                $agentDisplay = if ($expEntry.Agent) { $expEntry.Agent } else { $kqlRes.Agent }
+                Write-PhaseLog -Phase $PhaseName -Level 'SUCCESS' -Message "[PASS] $($expEntry.Resource) | $agentDisplay | node=$nodeDisplay | role=$($kqlRes.Role) | state=$stateIcon | managed=$($kqlRes.Managed)"
             } else {
                 $mismatches = @()
                 if (-not $stateMatch) { $mismatches += "state(exp=$($expEntry.ResourceState),kql=$($kqlRes.ResourceState))" }
@@ -542,7 +561,7 @@ Prometheus_HaClusterExporter_CL
     # =========================================================================
     # Step 5b: Compare Location Constraints — Exporter vs Workbook (KQL)
     # =========================================================================
-    $exporterConstraints = Get-ExporterLocationConstraints -ParsedMetrics $parsedMetrics
+    $exporterConstraints = Get-ExporterLocationConstraints -ParsedMetrics $dcMetricsRaw
     $exporterConstraintNames = @($exporterConstraints | ForEach-Object { $_.Constraint } | Select-Object -Unique | Sort-Object)
     $kqlConstraintNames = @($kqlConstraints | ForEach-Object { $_.constraint } | Select-Object -Unique | Sort-Object)
 

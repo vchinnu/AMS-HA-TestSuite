@@ -381,7 +381,7 @@ $vmListHtml                    </ul>
                 <button onclick="filterLogs('success')">Success</button>
             </div>
             <table>
-                <thead><tr><th>Time</th><th>Phase</th><th>Level</th><th>Message</th></tr></thead>
+                <thead><tr><th>Date / Time</th><th>Phase</th><th>Level</th><th>Message</th></tr></thead>
                 <tbody id="logBody">
                     $logRowsHtml
                 </tbody>

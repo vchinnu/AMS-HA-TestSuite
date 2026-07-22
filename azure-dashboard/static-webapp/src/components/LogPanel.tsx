@@ -36,9 +36,9 @@ export default function LogPanel({ entries, isRunning }: Props) {
       >
         {entries.map((entry, i) => {
           let msgClass = 'log-msg';
-          if (entry.message?.includes('FAILED') || entry.message?.includes('EXCEPTION')) {
+          if (entry.message?.includes('FAILED') || entry.message?.includes('[FAIL]') || entry.message?.includes('[ERROR]') || entry.message?.includes('EXCEPTION')) {
             msgClass += ' error';
-          } else if (entry.message?.includes('completed')) {
+          } else if (entry.message?.includes('completed') || entry.message?.includes('[SUCCESS]')) {
             msgClass += ' success';
           }
           return (

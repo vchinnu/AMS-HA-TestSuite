@@ -65,8 +65,31 @@ function Invoke-Phase3 {
         # Check if provider already exists
         $existing = $existingProviders | Where-Object { $_.Name -eq $providerName }
         if ($existing) {
-            Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Provider already exists: $providerName (state: $($existing.ProvisioningState))"
-            if ($existing.ProvisioningState -eq 'Succeeded') {
+            # Verify the existing provider's cluster name matches the current config
+            # Provider settings (clusterName) are baked at creation — if different, must recreate
+            $needsRecreate = $false
+            try {
+                $detail = Get-AzWorkloadsProviderInstance -ResourceGroupName $rgName -MonitorName $monitorName -Name $providerName -ErrorAction SilentlyContinue
+                $existingClusterName = $detail.ProviderSetting.ClusterName
+                if ($existingClusterName -and $existingClusterName -ne $clusterName) {
+                    Write-PhaseLog -Phase $PhaseName -Level 'WARN' -Message "Provider '$providerName' has clusterName='$existingClusterName' but config says '$clusterName'. Recreating..."
+                    $needsRecreate = $true
+                }
+            } catch {
+                Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Could not read provider settings for '$providerName': $_"
+            }
+
+            if ($needsRecreate) {
+                try {
+                    Remove-AzWorkloadsProviderInstance -ResourceGroupName $rgName -MonitorName $monitorName -Name $providerName -ErrorAction Stop | Out-Null
+                    Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Deleted stale provider: $providerName"
+                } catch {
+                    Write-PhaseLog -Phase $PhaseName -Level 'ERROR' -Message "Failed to delete provider '$providerName': $_"
+                    $allSuccess = $false
+                    continue
+                }
+            } elseif ($existing.ProvisioningState -eq 'Succeeded') {
+                Write-PhaseLog -Phase $PhaseName -Level 'INFO' -Message "Provider already exists: $providerName (state: $($existing.ProvisioningState))"
                 $createdCount++
                 continue
             }

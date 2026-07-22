@@ -309,7 +309,7 @@ body {
   display: flex;
   gap: 8px;
 }
-.log-time { color: #64748b; min-width: 60px; }
+.log-time { color: #64748b; min-width: 135px; }
 .log-phase { color: #0ea5e9; min-width: 24px; }
 .log-msg { color: #e2e8f0; }
 .log-msg.error { color: #f87171; }

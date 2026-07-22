@@ -1,0 +1,21 @@
+// Workbook Query: CLI Location Constraints
+// Shows cli-ban and cli-prefer constraints that indicate manual interventions
+// Table: Prometheus_HaClusterExporter_CL
+// Parameters: {{SID}}, {{CLUSTER_NAME}}
+
+let master = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(10min)
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where sid_s == '{{SID}}'
+| where clusterName_s == '{{CLUSTER_NAME}}'
+| where tostring(node_status['node']) == hostname_s
+| summarize arg_max(TimeGenerated, correlation_id_g, value_d) by sid_s, clusterName_s, hostname_s
+| top 1 by TimeGenerated
+| project correlation_id_g;
+Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| extend  resources = parse_json(labels_s)
+| where ( resources['constraint'] startswith 'cli-ban' ) or ( resources['constraint'] startswith 'cli-prefer' )
+| project   resource_constraint=resources['constraint'],Impact="warning"

@@ -1,0 +1,28 @@
+// Alert Query: Cluster Primary Node Switched
+// Fires when primary node switched for a resource
+// Severity: 2 (Warning)
+// Table: Prometheus_HaClusterExporter_CL
+// Parameters: {{CLUSTER_NAME}}
+
+let stoppedResources = (Prometheus_HaClusterExporter_CL
+| where name_s == 'ha_cluster_pacemaker_resources'
+| where clusterName_s in ('{{CLUSTER_NAME}}')
+| extend jsonlabel = parse_json(labels_s)
+| where jsonlabel.role == 'stopped'
+| extend agent = tostring(jsonlabel.agent), node = tostring(jsonlabel.node), resource = tostring(jsonlabel.resource), clone = tostring(jsonlabel.clone), role = tostring(jsonlabel.role), status = 'stopped', instance_id=tostring(jsonlabel.instid)
+| where strlen(agent) > 0
+| summarize count() by bin(TimeGenerated, 1m), correlation_id_g, clusterName_s, sid_s, node, clone, resource, agent, role, status );
+Prometheus_HaClusterExporter_CL
+| where name_s == 'ha_cluster_pacemaker_resources'
+| where value_d == 1
+| where clusterName_s in ('{{CLUSTER_NAME}}')
+| extend jsonlabel = parse_json(labels_s)
+| extend agent = tostring(jsonlabel.agent), node = tostring(jsonlabel.node), resource = tostring(jsonlabel.resource), clone = tostring(jsonlabel.clone), role = tostring(jsonlabel.role), status = tostring(jsonlabel.status), instance_id=tostring(jsonlabel.instid)
+| where strlen(agent) > 0
+| union stoppedResources
+| summarize count() by bin(TimeGenerated, 1m), correlation_id_g, clusterName_s, sid_s, node, clone, resource, agent, role, status
+| extend TimeGenerated = now()
+| summarize set_node = make_set_if(node, strlen(node) > 0) by TimeGenerated, clusterName_s, sid_s, clone, resource, agent, role, status
+| extend node_count = array_length(set_node)
+| extend expected_count = case(agent == 'ocf::heartbeat:IPaddr2', 1, agent == 'ocf::heartbeat:azure-events', 2, agent == 'ocf::heartbeat:azure-lb', 1, agent == 'ocf::suse:SAPHana', 1, agent == 'ocf::suse:SAPHanaTopology', 2, agent == 'ocf::heartbeat:SAPHanaTopology', 2, agent == 'ocf::heartbeat:SAPHana', 1, agent == 'stonith:fence_azure_arm', 1, agent == 'ocf::heartbeat:db2', 2, 1)
+| extend AggregatedValue = iff(node_count == expected_count, 0, 1)
