@@ -1,0 +1,72 @@
+let local_selected_sid = '{selected_sid}';
+let local_selected_clustername = '{selected_clustername}';
+let local_selected_hostname =  '{selected_hostname}';
+let local_timeframe_start = {node_timerange:start} ;
+let local_timeframe_end = {node_timerange:end} ;
+//
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation ID from that node only
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation IDs from that node only
+let master = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > local_timeframe_start
+| where TimeGenerated < local_timeframe_end
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where tostring(node_status['node']) == hostname_s
+| where sid_s == local_selected_sid
+| where clusterName_s==local_selected_clustername
+//| summarize TimeGenerated, correlation_id_g by sid_s, clusterName_s, hostname_s
+| project correlation_id_g;
+//master
+let workdata=materialize(Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| where name_s == "ha_cluster_pacemaker_nodes"
+| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| extend nodename=tostring(resources['node'])
+| where nodename == local_selected_hostname 
+//| where nodename in ( {selected_hostname} )
+| project TimeGenerated, nodename, node_status=resources['status'], value=value_d);
+//workdata
+let ts4=Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| where name_s == 'ha_cluster_pacemaker_resources'
+| where value_d == 1
+| where sid_s == local_selected_sid
+| where clusterName_s == local_selected_clustername
+| extend resources=parse_json(labels_s)
+| where isnotnull(resources['agent'])
+| extend resource_role=tolower(tostring(resources['role']))
+| extend nodename=tolower(tostring(resources['node']))
+| where nodename == local_selected_hostname
+| summarize
+    status_role_master = countif(resource_role == 'master')
+    by
+    bin(TimeGenerated, 1m),
+    correlation_id_g,
+    nodename
+| summarize
+    is_primary = case(sum(status_role_master) > 0, 1, 0)
+    by
+    TimeGenerated,
+    nodename;
+let ts3=workdata
+| where node_status == 'dc'
+| order by TimeGenerated desc;
+let ts2=workdata
+| where node_status == 'online'
+| order by TimeGenerated desc;
+let ts1=workdata
+| where node_status == 'expected_up'
+| order by TimeGenerated desc;
+ts1 
+| join kind=leftouter ( ts2 ) on TimeGenerated,nodename
+| join kind=leftouter ( ts3 ) on TimeGenerated,nodename
+| extend value2 = iff(isnull(value2), toreal(0), value2)
+| union ts4
+| project TimeGenerated, nodename, expected_up=value, is_online=value1, is_dc=value2, is_primary
+| order by TimeGenerated desc;

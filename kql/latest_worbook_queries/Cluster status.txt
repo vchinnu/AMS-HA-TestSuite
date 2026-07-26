@@ -1,0 +1,70 @@
+// of all currently running endpoints
+// find the most recent correlation id
+let upstatus = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(10min)
+| where name_s == "sapmon"
+| summarize arg_max(TimeGenerated, correlation_id_g, value_d) by sid_s, clusterName_s, hostname_s
+| project correlation_id_g;
+//identify the master (status = DC)
+let dcstatus = materialize(Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (upstatus)
+| where name_s == 'ha_cluster_pacemaker_nodes'
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where tostring(node_status['node']) == hostname_s
+| summarize arg_max(TimeGenerated, correlation_id_g) by sid_s, clusterName_s, hostname_s
+| project correlation_id_g);
+//find all pacemaker resources and their status from dc metrics
+( Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (dcstatus)
+| where name_s == "ha_cluster_pacemaker_resources" 
+| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| project resource_status=tostring(resources['status']), resource_role=tostring(resources['role']), resource_managed=tostring(resources['managed']), sid_s, clusterName_s
+| union (
+    Prometheus_HaClusterExporter_CL
+    | where correlation_id_g in (dcstatus)
+    | where name_s == "ha_cluster_pacemaker_resources"
+    | extend resources = parse_json(labels_s)
+    | where resources['role'] == 'stopped'
+    | summarize count() by tostring(resources['agent']), tostring(resources['resource']), tostring(resources['node']), resource_status='', resource_role=tostring(resources['role']), resource_managed=tostring(resources['managed']), sid_s, clusterName_s)
+| summarize 
+    resources_failed = countif(resource_status == 'failed' or resource_status == 'failed_ignored' or resource_role == 'stopped'),
+    resources_blocked = countif(resource_status == 'blocked' or resource_status == 'orphaned'), 
+    resources_active = countif(resource_role == 'started' and resource_managed == 'true')
+    + countif(resource_role == 'master' and resource_managed == 'true')
+    + countif(resource_role == 'slave' and resource_managed == 'true'),
+    resources_unmanaged = countif(resource_managed == 'false'),
+    status_red = countif(resource_status == 'failed' or resource_status == 'failed_ignored' or resource_role == 'stopped'),
+    status_yellow = countif(resource_status == 'blocked' or resource_status == 'orphaned'), 
+    status_green = countif(resource_status == 'active' and resource_managed == 'true'),
+    status_grey = countif(resource_managed == 'false')
+    by sid_s, clusterName_s)
+| union 
+//find all pacemaker nodes and their status from dc metrics
+( Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (dcstatus)
+| where name_s == "ha_cluster_pacemaker_nodes" 
+| where value_d == 1
+| extend  nodes = parse_json(labels_s)
+| summarize 
+    nodes_unclean = countif(nodes['status'] == 'unclean'), 
+    nodes_pending_shutdown = countif(nodes['status'] == 'pending' or nodes['status'] == 'shutdown'  or nodes['status'] == 'standby_onfail'), 
+    nodes_online = countif(nodes['status'] == 'online'),
+    nodes_maint_standby = countif(nodes['status'] == 'maintenance' or nodes['status'] == 'standby'),
+    status_red = countif(nodes['status'] == 'unclean'), 
+    status_yellow = countif(nodes['status'] == 'pending' or nodes['status'] == 'shutdown'  or nodes['status'] == 'standby_onfail'), 
+    status_green = countif(nodes['status'] == 'online' or nodes['status'] == 'dc'),
+    status_grey = countif(nodes['status'] == 'maintenance' or nodes['status'] == 'standby')
+    by sid_s, clusterName_s)   
+| union 
+//find all exporter up-status as additional metric
+(Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (upstatus)
+| where name_s == 'up'
+| summarize status_grey = case(countif(value_d==1) == 0, 1, 0)//only count grey status if there is no (0) endpoints up
+    by sid_s, clusterName_s)
+//summarize per cluster per sid
+| summarize sum(resources_failed),sum(resources_blocked),sum(resources_active),sum(resources_unmanaged),sum(nodes_unclean),sum(nodes_pending_shutdown),sum(nodes_online),sum(nodes_maint_standby),cluster_status = case(sum(status_red) > 0, 'red', sum(status_yellow) > 0, 'yellow', sum(status_grey) > 0, 'grey', sum(status_green) > 0, 'green', 'greyblue')  by sid_s, clusterName_s
+| project cluster_status,sum_resources_failed,sum_resources_blocked, sum_resources_active, sum_resources_unmanaged,sum_nodes_unclean, sum_nodes_pending_shutdown,sum_nodes_online,sum_nodes_maint_standby,sid_s,clusterName_s

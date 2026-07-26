@@ -1,0 +1,21 @@
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation ID from that node only
+let master = Prometheus_HaClusterExporter_CL
+| where TimeGenerated > ago(10min)
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where tostring(node_status['node']) == hostname_s
+| where sid_s == '{selected_sid}'
+| where clusterName_s=='{selected_clustername}'
+| summarize arg_max(TimeGenerated, correlation_id_g) by sid_s, clusterName_s, hostname_s
+| top 1 by TimeGenerated
+| project correlation_id_g;
+Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+| where name_s == "ha_cluster_pacemaker_nodes"
+| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| project hostname_s, correlation_id_g, resources['node'], resources['type'], resources['status'], value_d
+| order by tostring(resources_node) asc

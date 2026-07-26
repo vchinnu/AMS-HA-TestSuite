@@ -1,0 +1,33 @@
+let local_selected_sid = '{selected_sid}';
+let local_selected_clustername = '{selected_clustername}';
+let local_selected_resource = '{selected_resource}';
+let local_timeframe_start = {param_resource_timerange:start} ;
+let local_timeframe_end = {param_resource_timerange:end} ;
+//
+//find the most recent records for each cluster node
+//identify the master (status = DC)
+//and return the correlation ID from that node only
+let master = materialize(Prometheus_HaClusterExporter_CL
+| where TimeGenerated > local_timeframe_start
+| where TimeGenerated < local_timeframe_end
+| where value_d == 1
+| extend node_status=parse_json(labels_s)
+| where node_status['status']=='dc'
+| where sid_s == local_selected_sid
+| where clusterName_s == local_selected_clustername
+| where tostring(node_status['node']) == hostname_s
+| project correlation_id_g);
+//find all pacemaker resources and their status from dc metrics
+let clusterdata = materialize(Prometheus_HaClusterExporter_CL
+| where correlation_id_g in (master)
+//| where name_s == 'ha_cluster_pacemaker_resources' 
+//| where value_d == 1
+| extend  resources = parse_json(labels_s)
+| where resources['resource'] == local_selected_resource
+| project TimeGenerated, name_s,resource_agent = resources['agent'],  resource_node = resources['node'], value = value_d );
+let c1 = clusterdata
+| where name_s == 'ha_cluster_pacemaker_migration_threshold' ;
+let c2 = clusterdata
+| where name_s == 'ha_cluster_pacemaker_fail_count' ;
+c1 | join c2 on TimeGenerated 
+| project TimeGenerated, node=resource_node, threshold = value, failcount = value1
